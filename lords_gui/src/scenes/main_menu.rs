@@ -19,11 +19,8 @@ pub struct MainMenu {
     saves: Option<SaveSummary>,
 }
 
-/// What the menu needs to know about the saves on disk.
 struct SaveSummary {
-    /// The [`Saves::generation`](crate::saves::Saves::generation) this was read at.
     generation: u64,
-    /// The save to continue from: the newest one that can be loaded.
     newest: Option<SaveEntry>,
     /// Whether there is anything at all to show on the load screen.
     any: bool,
@@ -148,12 +145,11 @@ fn menu_button(ui: &mut egui::Ui, text: &str, enabled: bool) -> egui::Response {
     )
 }
 
-/// Offers to go fullscreen, once.
 fn fullscreen_prompt(ui: &mut egui::Ui, shared: &mut Shared<'_>) {
     let mut open = true;
     let mut answered = false;
 
-    egui::Window::new("Play in fullscreen?")
+    egui::Window::new("Fullscreen?")
         .open(&mut open)
         .collapsible(false)
         .movable(false)

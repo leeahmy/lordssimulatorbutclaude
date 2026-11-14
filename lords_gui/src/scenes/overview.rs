@@ -31,20 +31,14 @@ const SECONDS_PER_DAY: u64 = 24 * 60 * 60;
 pub struct Overview {
     runtime: Runtime,
     playthrough: SimulationId,
-    /// Name of the save that saving again replaces, once the player has named one.
     save_label: Option<String>,
-    /// The name being typed into the save dialog, while it is open.
     save_dialog: Option<String>,
     focus_save_dialog: bool,
     last_autosave: Instant,
-    /// Simulation time of the latest save, so that a game that has not moved on since is
-    /// not saved again by itself.
     last_saved_time: Option<Timestamp>,
 }
 
 impl Overview {
-    /// Shows the game `runtime` is running, which is part of `playthrough` and, if it was
-    /// loaded from a save the player named, was last saved as `save_label`.
     pub fn new(runtime: Runtime, playthrough: SimulationId, save_label: Option<String>) -> Self {
         Self {
             runtime,
@@ -166,7 +160,6 @@ impl Overview {
         }
     }
 
-    /// Asks for the game as it is in `snapshot` to be saved.
     fn save(
         &mut self,
         shared: &mut Shared<'_>,
@@ -188,7 +181,6 @@ impl Overview {
         });
     }
 
-    /// Saves the game by itself if, at `now`, it has run for long enough since the last time.
     fn autosave(&mut self, shared: &mut Shared<'_>, snapshot: &Snapshot, now: Instant) {
         let Some(interval) = shared.settings.autosave_interval() else {
             return;
@@ -267,17 +259,12 @@ impl Overview {
 }
 
 fn clock(ui: &mut egui::Ui, format: &DateTimeFormat, time: Timestamp, paused: bool) {
-    // Monospace, and padded by the format, so that the controls beside the clock stay put
-    // as time passes.
     let now = RichText::new(format.date_time(time))
-        .monospace()
         .size(CONTROL_SIZE);
 
     ui.label(if paused { now.weak() } else { now.strong() });
 }
 
-/// Tells the player that the simulation thread is gone, and returns whether they chose to
-/// leave the game.
 fn stopped_banner(ui: &mut egui::Ui) -> bool {
     let mut leave = false;
 
@@ -285,8 +272,7 @@ fn stopped_banner(ui: &mut egui::Ui) -> bool {
         ui.horizontal_wrapped(|ui| {
             ui.colored_label(
                 ui.visuals().error_fg_color,
-                "The simulation has stopped unexpectedly. Time no longer passes, but the game \
-                 can still be saved.",
+                "The simulation has stopped unexpectedly.",
             );
             leave = ui.button("Main Menu").clicked();
         });
@@ -327,8 +313,6 @@ fn fact(ui: &mut egui::Ui, key: &str, value: String) {
     ui.end_row();
 }
 
-/// Formats the age at `now` of someone born at `birth`, in the largest unit they have
-/// completed at least one of.
 fn format_age(now: Timestamp, birth: Timestamp) -> String {
     let today = Date::from(now);
     let birthday = Date::from(birth);

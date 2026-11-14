@@ -1,5 +1,3 @@
-//! Writing simulation time out the way the player prefers.
-
 use std::fmt::{self, Display, Formatter, Write};
 
 use lords_sim::Timestamp;
@@ -19,21 +17,18 @@ pub struct DateTimeFormat {
 }
 
 impl DateTimeFormat {
-    /// Formats the date `timestamp` falls on, with the month and day padded to two digits
-    /// and the year to four, so that the result keeps its width from one day to the next.
     pub fn date(&self, timestamp: Timestamp) -> String {
         let date = Date::from(timestamp);
         let (year, month, day) = (date.year(), date.month(), date.day());
         let sep = self.date_separator;
 
         match self.date_order {
-            DateOrder::Dmy => format!("{day:02}{sep}{month:02}{sep}{year:04}"),
-            DateOrder::Mdy => format!("{month:02}{sep}{day:02}{sep}{year:04}"),
-            DateOrder::Ymd => format!("{year:04}{sep}{month:02}{sep}{day:02}"),
+            DateOrder::Dmy => format!("{day}{sep}{month}{sep}{year}"),
+            DateOrder::Mdy => format!("{month}{sep}{day}{sep}{year}"),
+            DateOrder::Ymd => format!("{year}{sep}{month}{sep}{day}"),
         }
     }
 
-    /// Formats the time of day at `timestamp`.
     pub fn time(&self, timestamp: Timestamp) -> String {
         let time = TimeOfDay::from(timestamp);
         let (hour, minute, second) = (time.hour(), time.minute(), time.second());
@@ -44,7 +39,6 @@ impl DateTimeFormat {
         }
     }
 
-    /// Formats the date and the time of day at `timestamp`.
     pub fn date_time(&self, timestamp: Timestamp) -> String {
         format!("{} {}", self.date(timestamp), self.time(timestamp))
     }

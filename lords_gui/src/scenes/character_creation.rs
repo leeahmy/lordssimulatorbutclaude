@@ -29,7 +29,6 @@ impl Scene for CharacterCreation {
     fn update(&mut self, ui: &mut egui::Ui, shared: &mut Shared<'_>) -> SceneResponse {
         let menu = top_panel(ui, false);
 
-        // Escape first lets go of a name field, and only then leaves the screen.
         let mut back = !shared.dialog_open
             && !ui.ctx().text_edit_focused()
             && ui.input(|input| input.key_pressed(egui::Key::Escape));
@@ -224,7 +223,6 @@ impl CharacterCreation {
 
         let clicked = ui.add_enabled(missing.is_none(), button).clicked();
 
-        // Always there, so that the card keeps its height once everything is filled in.
         ui.vertical_centered(|ui| {
             ui.label(RichText::new(missing.unwrap_or(" ")).weak().small());
         });

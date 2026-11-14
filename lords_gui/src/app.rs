@@ -31,7 +31,6 @@ impl App {
         let settings = cc.storage.map(Settings::load).unwrap_or_default();
 
         icons::install(ctx);
-        // The interface scale is a setting, which the built-in shortcuts would bypass.
         ctx.options_mut(|options| options.zoom_with_keyboard = false);
         ctx.set_zoom_factor(settings.ui_scale.unwrap_or(settings::PROVISIONAL_UI_SCALE));
         ctx.set_theme(settings.theme);
@@ -48,13 +47,11 @@ impl App {
         }
     }
 
-    /// Picks an interface scale for the display the window is on, unless there is one.
     fn pick_ui_scale(&mut self, ctx: &egui::Context) {
         if self.settings.ui_scale.is_some() {
             return;
         }
 
-        // Sizes come in interface points, which the current scale has already shrunk.
         let zoom = ctx.zoom_factor();
         let display = ctx
             .input(|input| input.viewport().monitor_size)
@@ -120,7 +117,6 @@ impl App {
         Box::new(Overview::new(runtime, playthrough, save_label))
     }
 
-    /// Leaves the current scene for `next`.
     fn enter(&mut self, next: Box<dyn Scene>) {
         self.exit_scene();
         self.scene = next;
