@@ -17,17 +17,6 @@ Packages for all three systems are attached to each
   The app is not notarized, so macOS refuses to open it the first time; allow it under
   System Settings → Privacy & Security.
 
-## Saves and settings
-
-The game keeps its settings in `app.ron` and its saves under `saves/`, one folder per character, in:
-
-- **Windows:** `%APPDATA%\lords_simulator\data`
-- **Linux:** `~/.local/share/lords_simulator` (or under `$XDG_DATA_HOME`)
-- **macOS:** `~/Library/Application Support/lords_simulator`
-
-Saves are binary `.lss` files. *Export* on the Load Game screen writes a readable `.ron` copy
-next to a save.
-
 ## Building
 
 With a stable [Rust toolchain](https://rustup.rs) installed (1.95 or newer), on any of the three
@@ -38,7 +27,3 @@ cargo run --release
 ```
 
 Linux needs a C linker.
-
-The workspace is four crates: `lords_sim` is the simulation itself, `lords_runtime` runs it in
-real time on its own thread, `lords_save` reads and writes saved games, and `lords_gui` is the
-interface. `cargo test --workspace` runs the tests of all four.
