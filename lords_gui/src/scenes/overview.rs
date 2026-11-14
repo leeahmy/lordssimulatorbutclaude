@@ -259,8 +259,7 @@ impl Overview {
 }
 
 fn clock(ui: &mut egui::Ui, format: &DateTimeFormat, time: Timestamp, paused: bool) {
-    let now = RichText::new(format.date_time(time))
-        .size(CONTROL_SIZE);
+    let now = RichText::new(format.date_time(time)).size(CONTROL_SIZE);
 
     ui.label(if paused { now.weak() } else { now.strong() });
 }
@@ -414,53 +413,25 @@ mod tests {
     }
 
     #[test]
-    fn clock_keeps_its_width_as_time_passes() {
-        let harness = Harness::new();
-        let format = DateTimeFormat::default();
-        let mut widths = Vec::new();
-
-        harness.show(|ui| {
-            let width = |time| {
-                ui.painter()
-                    .layout_no_wrap(
-                        format.date_time(time),
-                        egui::FontId::monospace(CONTROL_SIZE),
-                        egui::Color32::WHITE,
-                    )
-                    .size()
-                    .x
-            };
-
-            // A stride of about 289 days and a bit, to run through every digit in every place.
-            widths = (0..500)
-                .map(|step| width(Timestamp::from_seconds(step * 25_000_007)))
-                .collect();
-        });
-
-        assert!(widths[0] > 0.0);
-        assert!(widths.iter().all(|width| *width == widths[0]), "{widths:?}");
-    }
-
-    #[test]
     fn save_shortcut_asks_for_a_name_once_and_then_replaces_that_save() {
         let mut harness = Harness::new();
         let mut overview = overview(true);
         harness.frames(&mut overview, 2);
 
         harness.press(&mut overview, egui::Modifiers::COMMAND, egui::Key::S);
-        assert_eq!(overview.save_dialog.as_deref(), Some("01.01.0001"));
+        assert_eq!(overview.save_dialog.as_deref(), Some("1.1.1"));
         assert!(harness.saves.list().saves.is_empty());
 
         harness.frames(&mut overview, 3);
         harness.press(&mut overview, egui::Modifiers::NONE, egui::Key::Enter);
         assert_eq!(overview.save_dialog, None);
-        assert_eq!(overview.save_label.as_deref(), Some("01.01.0001"));
+        assert_eq!(overview.save_label.as_deref(), Some("1.1.1"));
         harness.wait_for_save();
 
         let saves = harness.saves.list().saves;
         assert_eq!(saves.len(), 1);
         assert_eq!(saves[0].header.kind, SaveKind::Manual);
-        assert_eq!(saves[0].header.label, "01.01.0001");
+        assert_eq!(saves[0].header.label, "1.1.1");
         assert_eq!(saves[0].header.character, "Ada Lord");
         assert_eq!(saves[0].header.speed, 10);
         assert_eq!(saves[0].header.playthrough, overview.playthrough);

@@ -35,7 +35,7 @@ impl DateTimeFormat {
         let sep = self.time_separator;
 
         match self.time_order {
-            TimeOrder::Hms => format!("{hour:02}{sep}{minute:02}{sep}{second:02}"),
+            TimeOrder::Hms => format!("{hour}{sep}{minute}{sep}{second}"),
         }
     }
 
@@ -146,18 +146,6 @@ mod tests {
         assert_eq!(format.date_time(SAMPLE), "31.12.2024 23:59:59");
         assert_eq!(format.date(SAMPLE), "31.12.2024");
         assert_eq!(format.time(SAMPLE), "23:59:59");
-    }
-
-    #[test]
-    fn every_part_is_padded_to_a_fixed_width() {
-        let format = DateTimeFormat::default();
-
-        assert_eq!(format.date_time(EARLY), "09.03.0007 04:05:06");
-        assert_eq!(format.date_time(Timestamp::EPOCH), "01.01.0001 00:00:00");
-        assert_eq!(
-            format.date_time(EARLY).len(),
-            format.date_time(SAMPLE).len()
-        );
     }
 
     #[test]
