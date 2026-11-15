@@ -35,7 +35,7 @@ impl DateTimeFormat {
         let sep = self.time_separator;
 
         match self.time_order {
-            TimeOrder::Hms => format!("{hour}{sep}{minute}{sep}{second}"),
+            TimeOrder::Hms => format!("{hour:02}{sep}{minute:02}{sep}{second:02}"),
         }
     }
 
