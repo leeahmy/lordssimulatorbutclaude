@@ -1,3 +1,6 @@
+use std::collections::hash_map::RandomState;
+use std::hash::{BuildHasher, Hasher};
+
 use eframe::Frame;
 use egui::Ui;
 use lords_runtime::{Runtime, Speed};
@@ -75,8 +78,9 @@ impl App {
             SceneResponse::None => {}
             SceneResponse::Transition(next) => self.enter(next),
             SceneResponse::StartSim { name, sex } => {
+                let seed = RandomState::new().build_hasher().finish();
                 let overview = self.overview(
-                    Simulation::new(name, sex),
+                    Simulation::generate(name, sex, seed),
                     Speed::BASE,
                     false,
                     SimulationId::generate(),

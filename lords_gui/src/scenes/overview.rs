@@ -1,3 +1,5 @@
+mod surroundings;
+
 use std::sync::Arc;
 use std::sync::mpsc::{Receiver, TryRecvError};
 use std::time::Instant;
@@ -75,7 +77,9 @@ impl Scene for Overview {
         self.time_bar(ui, &shared.settings.datetime, &snapshot, keyboard_free);
         let mut leave = !self.runtime.is_running() && stopped_banner(ui);
         character_panel(ui, &view.player, view.time, &shared.settings.datetime);
-        content_area(ui);
+        if let Some(command) = surroundings::show(ui, view) {
+            self.runtime.send(command);
+        }
 
         self.autosave(shared, &snapshot, Instant::now());
         self.show_save_dialog(ui, &snapshot);
@@ -374,10 +378,6 @@ fn count(number: u64, unit: &str) -> String {
     } else {
         format!("{number} {unit}s")
     }
-}
-
-fn content_area(ui: &mut egui::Ui) {
-    egui::CentralPanel::default().show(ui, |_ui| {});
 }
 
 fn toggle_pause_pressed(ui: &egui::Ui) -> bool {

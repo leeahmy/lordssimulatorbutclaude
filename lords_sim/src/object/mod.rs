@@ -4,6 +4,8 @@ use std::fmt::{Display, Formatter};
 use serde::{Deserialize, Serialize};
 
 use crate::Timestamp;
+use crate::space::{Length, Location};
+use crate::world::Subject;
 
 #[derive(Default, Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Object {
@@ -16,27 +18,13 @@ impl Object {
         Self { location, creation }
     }
 
+    pub fn location(&self) -> Location {
+        self.location
+    }
+
     /// Returns the moment this object came into existence.
     pub fn creation(&self) -> Timestamp {
         self.creation
-    }
-}
-
-/// Represents a location on a 2-dimensional plane, with millimeter accuracy.
-///
-/// A location is represented by the x and y coordinates relative to the center of the plane.
-/// The coordinates are stored as integers, and floating point errors are not a consideration.
-/// This location implementation should only be used for simplistic representations of 2-dimensional flat worlds
-/// and never in more complex, planetary contexts.
-#[derive(Default, Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Location {
-    x: i64,
-    y: i64,
-}
-
-impl Location {
-    pub fn new(x: i64, y: i64) -> Self {
-        Self { x, y }
     }
 }
 
@@ -45,6 +33,8 @@ pub struct Animal {
     object: Object,
     name: Name,
     sex: Sex,
+    #[serde(default)]
+    activity: Option<Activity>,
 }
 
 impl Animal {
@@ -53,8 +43,26 @@ impl Animal {
             object: Object::new(location, time),
             name,
             sex,
+            activity: None,
         }
     }
+
+    pub(crate) fn move_to(&mut self, location: Location) {
+        self.object.location = location;
+    }
+
+    pub(crate) fn set_activity(&mut self, activity: Option<Activity>) {
+        self.activity = activity;
+    }
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Activity {
+    /// Walking to `destination`, which is where `toward` is within reach.
+    Walking {
+        toward: Subject,
+        destination: Location,
+    },
 }
 
 #[derive(Default, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -122,15 +130,34 @@ pub struct Human {
 }
 
 impl Human {
+    /// How far from the body a hand gets.
+    pub const REACH: Length = Length::from_millimeters(800);
+
+    /// How far off the ground the eyes are.
+    pub const EYE_HEIGHT: Length = Length::from_millimeters(1_600);
+
+    /// The ground covered in an in-game second of walking.
+    pub const WALKING_SPEED: Length = Length::from_millimeters(1_400);
+
     pub fn new(location: Location, time: Timestamp, name: Name, sex: Sex) -> Self {
         Self {
             animal: Animal::new(location, time, name, sex),
         }
     }
+
+    pub(crate) fn animal_mut(&mut self) -> &mut Animal {
+        &mut self.animal
+    }
 }
 
 pub trait Living {
     fn animal(&self) -> &Animal;
+    fn location(&self) -> Location {
+        self.animal().object.location()
+    }
+    fn activity(&self) -> Option<Activity> {
+        self.animal().activity
+    }
     fn name(&self) -> &Name {
         &self.animal().name
     }

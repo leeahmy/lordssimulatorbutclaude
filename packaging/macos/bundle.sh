@@ -1,7 +1,4 @@
 #!/usr/bin/env bash
-# Wraps a built binary in "Lord's Simulator.app" and zips it. Runs on macOS only.
-#
-# Usage: bundle.sh <binary> <version> <output-dir>
 set -euo pipefail
 
 binary=$1
@@ -36,8 +33,6 @@ done
 iconutil --convert icns --output "$contents/Resources/AppIcon.icns" "$iconset"
 rm -rf "$work"
 
-# Ad-hoc signature: Apple Silicon refuses to run unsigned code. Replace "-" with a
-# Developer ID identity here to sign properly.
 codesign --force --sign - "$app"
 codesign --verify --strict "$app"
 
