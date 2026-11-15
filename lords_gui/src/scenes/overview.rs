@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::sync::mpsc::{Receiver, TryRecvError};
 use std::time::Instant;
 
 use egui::RichText;
@@ -6,7 +7,7 @@ use lords_runtime::{Runtime, Snapshot, Speed};
 use lords_save::{SaveKind, SaveRequest, SimulationId};
 use lords_sim::object::Living;
 use lords_sim::time::gregorian::Date;
-use lords_sim::{Human, Timestamp};
+use lords_sim::{Human, State, Timestamp};
 
 use crate::datetime::DateTimeFormat;
 use crate::icons;
@@ -36,6 +37,13 @@ pub struct Overview {
     focus_save_dialog: bool,
     last_autosave: Instant,
     last_saved_time: Option<Timestamp>,
+    pending_saves: Vec<PendingSave>,
+}
+
+struct PendingSave {
+    kind: SaveKind,
+    label: String,
+    state: Receiver<Arc<State>>,
 }
 
 impl Overview {
@@ -48,6 +56,7 @@ impl Overview {
             focus_save_dialog: false,
             last_autosave: Instant::now(),
             last_saved_time: None,
+            pending_saves: Vec::new(),
         }
     }
 }
@@ -55,7 +64,7 @@ impl Overview {
 impl Scene for Overview {
     fn update(&mut self, ui: &mut egui::Ui, shared: &mut Shared<'_>) -> SceneResponse {
         let snapshot = self.runtime.snapshot();
-        let state = &snapshot.state;
+        let view = &snapshot.view;
         let keyboard_free = !shared.dialog_open && self.save_dialog.is_none();
 
         let mut action = top_panel(ui, true);
@@ -65,24 +74,29 @@ impl Scene for Overview {
 
         self.time_bar(ui, &shared.settings.datetime, &snapshot, keyboard_free);
         let mut leave = !self.runtime.is_running() && stopped_banner(ui);
-        character_panel(ui, &state.player, state.time, &shared.settings.datetime);
+        character_panel(ui, &view.player, view.time, &shared.settings.datetime);
         content_area(ui);
 
         self.autosave(shared, &snapshot, Instant::now());
-        self.show_save_dialog(ui, shared, &snapshot);
+        self.show_save_dialog(ui, &snapshot);
 
+        let mut app_action = None;
         match action {
             Some(MenuAction::Save) => match self.save_label.clone() {
-                Some(label) => self.save(shared, &snapshot, SaveKind::Manual, label),
+                Some(label) => self.save(&snapshot, SaveKind::Manual, label),
                 None => self.open_save_dialog(shared, &snapshot),
             },
             Some(MenuAction::SaveAs) => self.open_save_dialog(shared, &snapshot),
             Some(MenuAction::MainMenu) => leave = true,
-            Some(MenuAction::App(action)) => return SceneResponse::App(action),
+            Some(MenuAction::App(action)) => app_action = Some(action),
             None => {}
         }
 
-        if leave {
+        self.write_captured_saves(shared, snapshot.speed);
+
+        if let Some(action) = app_action {
+            SceneResponse::App(action)
+        } else if leave {
             SceneResponse::Transition(Box::new(MainMenu::default()))
         } else {
             SceneResponse::None
@@ -91,7 +105,14 @@ impl Scene for Overview {
 
     fn on_exit(&mut self, shared: &mut Shared<'_>) {
         let snapshot = self.runtime.snapshot();
-        self.save(shared, &snapshot, SaveKind::Exit, String::new());
+        self.save(&snapshot, SaveKind::Exit, String::new());
+
+        for PendingSave { kind, label, state } in std::mem::take(&mut self.pending_saves) {
+            match state.recv() {
+                Ok(state) => self.write(shared, kind, label, snapshot.speed, state),
+                Err(_) => log_lost_save(),
+            }
+        }
     }
 }
 
@@ -107,7 +128,7 @@ impl Overview {
             egui::Aligned::new(egui::Align2::CENTER_TOP).show(ui, |ui| {
                 ui.horizontal(|ui| {
                     self.pause_button(ui, snapshot.paused, keyboard_free);
-                    clock(ui, format, snapshot.state.time, snapshot.paused);
+                    clock(ui, format, snapshot.view.time, snapshot.paused);
                     self.speed_slider(ui, snapshot.speed);
                 });
             });
@@ -160,28 +181,49 @@ impl Overview {
         }
     }
 
-    fn save(
-        &mut self,
-        shared: &mut Shared<'_>,
-        snapshot: &Snapshot,
-        kind: SaveKind,
-        label: String,
-    ) {
-        self.last_saved_time = Some(snapshot.state.time);
+    fn save(&mut self, snapshot: &Snapshot, kind: SaveKind, label: String) {
+        self.last_saved_time = Some(snapshot.view.time);
         if kind == SaveKind::Manual {
             self.save_label = Some(label.clone());
         }
 
+        self.pending_saves.push(PendingSave {
+            kind,
+            label,
+            state: self.runtime.capture(),
+        });
+    }
+
+    fn write_captured_saves(&mut self, shared: &mut Shared<'_>, speed: Speed) {
+        for PendingSave { kind, label, state } in std::mem::take(&mut self.pending_saves) {
+            match state.try_recv() {
+                Ok(captured) => self.write(shared, kind, label, speed, captured),
+                Err(TryRecvError::Empty) => {
+                    self.pending_saves.push(PendingSave { kind, label, state });
+                }
+                Err(TryRecvError::Disconnected) => log_lost_save(),
+            }
+        }
+    }
+
+    fn write(
+        &self,
+        shared: &mut Shared<'_>,
+        kind: SaveKind,
+        label: String,
+        speed: Speed,
+        state: Arc<State>,
+    ) {
         shared.saves.save(SaveRequest {
             playthrough: self.playthrough,
             kind,
             label,
-            speed: snapshot.speed.multiplier(),
-            state: Arc::clone(&snapshot.state),
+            speed: speed.multiplier(),
+            state,
         });
     }
 
-    fn autosave(&mut self, shared: &mut Shared<'_>, snapshot: &Snapshot, now: Instant) {
+    fn autosave(&mut self, shared: &Shared<'_>, snapshot: &Snapshot, now: Instant) {
         let Some(interval) = shared.settings.autosave_interval() else {
             return;
         };
@@ -190,8 +232,8 @@ impl Overview {
         }
 
         self.last_autosave = now;
-        if self.last_saved_time != Some(snapshot.state.time) {
-            self.save(shared, snapshot, SaveKind::Auto, String::new());
+        if self.last_saved_time != Some(snapshot.view.time) {
+            self.save(snapshot, SaveKind::Auto, String::new());
         }
     }
 
@@ -199,18 +241,13 @@ impl Overview {
         let suggestion = self
             .save_label
             .clone()
-            .unwrap_or_else(|| shared.settings.datetime.date(snapshot.state.time));
+            .unwrap_or_else(|| shared.settings.datetime.date(snapshot.view.time));
 
         self.save_dialog = Some(suggestion);
         self.focus_save_dialog = true;
     }
 
-    fn show_save_dialog(
-        &mut self,
-        ui: &mut egui::Ui,
-        shared: &mut Shared<'_>,
-        snapshot: &Snapshot,
-    ) {
+    fn show_save_dialog(&mut self, ui: &mut egui::Ui, snapshot: &Snapshot) {
         let Some(mut label) = self.save_dialog.take() else {
             return;
         };
@@ -251,11 +288,15 @@ impl Overview {
         });
 
         if save {
-            self.save(shared, snapshot, SaveKind::Manual, label.trim().to_owned());
+            self.save(snapshot, SaveKind::Manual, label.trim().to_owned());
         } else if !(cancel || modal.should_close()) {
             self.save_dialog = Some(label);
         }
     }
+}
+
+fn log_lost_save() {
+    log::error!("The simulation thread has stopped; the game was not saved");
 }
 
 fn clock(ui: &mut egui::Ui, format: &DateTimeFormat, time: Timestamp, paused: bool) {
@@ -426,7 +467,7 @@ mod tests {
         harness.press(&mut overview, egui::Modifiers::NONE, egui::Key::Enter);
         assert_eq!(overview.save_dialog, None);
         assert_eq!(overview.save_label.as_deref(), Some("1.1.1"));
-        harness.wait_for_save();
+        harness.wait_for_save_from(&mut overview);
 
         let saves = harness.saves.list().saves;
         assert_eq!(saves.len(), 1);
@@ -438,7 +479,7 @@ mod tests {
 
         harness.press(&mut overview, egui::Modifiers::COMMAND, egui::Key::S);
         assert_eq!(overview.save_dialog, None);
-        harness.wait_for_save();
+        harness.wait_for_save_from(&mut overview);
         assert_eq!(harness.saves.list().saves.len(), 1);
         assert!(harness.saves.error().is_none());
         assert!(harness.saves.saved_notice().is_some());
@@ -480,7 +521,12 @@ mod tests {
             .saves
             .load(&saves[0].path)
             .expect("the exit save loads");
-        assert_eq!(loaded.state, *overview.runtime.snapshot().state);
+        let state = overview
+            .runtime
+            .capture()
+            .recv()
+            .expect("the simulation is still running");
+        assert_eq!(loaded.state, *state);
         assert_eq!(loaded.header.speed, 10);
     }
 
@@ -489,21 +535,21 @@ mod tests {
         let mut harness = Harness::new();
         harness.settings.autosave_minutes = 1;
         let mut overview = overview(false);
-        wait_until(|| overview.runtime.snapshot().state.time > Timestamp::EPOCH);
+        wait_until(|| overview.runtime.snapshot().view.time > Timestamp::EPOCH);
         let snapshot = overview.runtime.snapshot();
         let started = overview.last_autosave;
         let after = |seconds| started + Duration::from_secs(seconds);
 
-        overview.autosave(&mut harness.shared(), &snapshot, after(59));
+        overview.autosave(&harness.shared(), &snapshot, after(59));
         assert_eq!(overview.last_saved_time, None);
 
-        overview.autosave(&mut harness.shared(), &snapshot, after(60));
-        assert_eq!(overview.last_saved_time, Some(snapshot.state.time));
-        harness.wait_for_save();
+        overview.autosave(&harness.shared(), &snapshot, after(60));
+        assert_eq!(overview.last_saved_time, Some(snapshot.view.time));
+        harness.wait_for_save_from(&mut overview);
 
         // Neither before another interval has passed, nor while the game has not moved on.
-        overview.autosave(&mut harness.shared(), &snapshot, after(119));
-        overview.autosave(&mut harness.shared(), &snapshot, after(120));
+        overview.autosave(&harness.shared(), &snapshot, after(119));
+        overview.autosave(&harness.shared(), &snapshot, after(120));
         harness.saves.finish();
 
         let saves = harness.saves.list().saves;
@@ -519,14 +565,14 @@ mod tests {
         harness.settings.autosave_minutes = 1;
         let mut paused = overview(true);
         let snapshot = paused.runtime.snapshot();
-        paused.autosave(&mut harness.shared(), &snapshot, much_later);
+        paused.autosave(&harness.shared(), &snapshot, much_later);
         assert_eq!(paused.last_saved_time, None);
 
         harness.settings.autosave_minutes = 0;
         let mut running = overview(false);
-        wait_until(|| running.runtime.snapshot().state.time > Timestamp::EPOCH);
+        wait_until(|| running.runtime.snapshot().view.time > Timestamp::EPOCH);
         let snapshot = running.runtime.snapshot();
-        running.autosave(&mut harness.shared(), &snapshot, much_later);
+        running.autosave(&harness.shared(), &snapshot, much_later);
         assert_eq!(running.last_saved_time, None);
 
         harness.saves.finish();

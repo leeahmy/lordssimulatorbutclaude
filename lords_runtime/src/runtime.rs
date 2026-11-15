@@ -4,7 +4,7 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use log::{error, warn};
-use lords_sim::{Command, Simulation};
+use lords_sim::{Command, Simulation, State};
 
 use crate::engine::{Engine, Request};
 use crate::snapshot::{Published, Snapshot};
@@ -52,9 +52,19 @@ impl Runtime {
         }
     }
 
-    /// Returns the simulation as it was last published.
+    /// Returns what there was to show of the simulation when it was last published.
     pub fn snapshot(&self) -> Arc<Snapshot> {
         self.published.get()
+    }
+
+    /// Asks the simulation for a copy of its whole state, as needed to save it.
+    ///
+    /// The state arrives once the simulation gets to the request, which it does before its
+    /// next tick, or at once while paused.
+    pub fn capture(&self) -> Receiver<Arc<State>> {
+        let (sender, captured) = mpsc::channel();
+        self.request(Request::Capture(sender));
+        captured
     }
 
     /// Returns whether the simulation thread is still there to tick and to take requests.
@@ -183,6 +193,23 @@ mod tests {
         assert!(snapshot.paused);
         assert_eq!(snapshot.speed, Speed::MAX);
         assert!(runtime.is_running());
+    }
+
+    #[test]
+    fn state_is_captured_while_paused() {
+        let runtime = Runtime::spawn_with(
+            Simulation::new(Name::default(), Sex::Female),
+            Speed::BASE,
+            true,
+            || {},
+        );
+
+        let state = runtime
+            .capture()
+            .recv_timeout(TIMEOUT)
+            .expect("the state was never captured");
+
+        assert_eq!(state.time, runtime.snapshot().view.time);
     }
 
     #[test]

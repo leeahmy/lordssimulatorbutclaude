@@ -120,6 +120,17 @@ impl Harness {
             self.saves.generation() != generation
         });
     }
+
+    /// Waits for a save that `scene` only asks for while it is being shown.
+    pub(crate) fn wait_for_save_from(&mut self, scene: &mut dyn Scene) {
+        let generation = self.saves.generation();
+        let start = Instant::now();
+        while self.saves.generation() == generation {
+            assert!(start.elapsed() < TIMEOUT, "waited too long");
+            self.frame(scene, Vec::new());
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    }
 }
 
 pub(crate) fn wait_until(mut condition: impl FnMut() -> bool) {

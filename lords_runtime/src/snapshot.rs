@@ -1,14 +1,13 @@
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
-use lords_sim::State;
+use lords_sim::View;
 
 use crate::speed::Speed;
 
-/// The simulation as it was when the simulation thread last published it.
+/// What there was to show of the simulation when the simulation thread last published it.
 #[derive(Debug)]
 pub struct Snapshot {
-    /// Shared, so that it can be handed on, for instance to be saved, without copying it.
-    pub state: Arc<State>,
+    pub view: View,
     pub paused: bool,
     pub speed: Speed,
 }

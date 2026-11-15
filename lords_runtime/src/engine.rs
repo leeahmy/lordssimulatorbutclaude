@@ -1,7 +1,8 @@
 use std::sync::Arc;
+use std::sync::mpsc::Sender;
 use std::time::{Duration, Instant};
 
-use lords_sim::{Command, Simulation};
+use lords_sim::{Command, Simulation, State};
 
 use crate::clock::Clock;
 use crate::snapshot::Snapshot;
@@ -14,6 +15,7 @@ pub(crate) enum Request {
     Resume,
     SetSpeed(Speed),
     Command(Command),
+    Capture(Sender<Arc<State>>),
 }
 
 pub(crate) struct Engine {
@@ -45,6 +47,9 @@ impl Engine {
                 self.clock.set_interval(speed.tick_interval(), now);
             }
             Request::Command(command) => self.sim.apply(command),
+            Request::Capture(captured) => {
+                let _ = captured.send(Arc::new(self.sim.state().clone()));
+            }
         }
     }
 
@@ -68,7 +73,7 @@ impl Engine {
 
     pub(crate) fn snapshot(&self) -> Snapshot {
         Snapshot {
-            state: Arc::new(self.sim.state().clone()),
+            view: self.sim.view(),
             paused: self.clock.is_paused(),
             speed: self.speed,
         }
@@ -77,6 +82,8 @@ impl Engine {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::mpsc;
+
     use lords_sim::{Name, Sex, Timestamp};
 
     use super::*;
@@ -110,7 +117,7 @@ mod tests {
         assert!(engine.advance(start + INTERVAL));
         assert!(engine.advance(start + INTERVAL * 2));
 
-        assert_eq!(engine.snapshot().state.time, after_ticks(2));
+        assert_eq!(engine.snapshot().view.time, after_ticks(2));
     }
 
     #[test]
@@ -121,12 +128,12 @@ mod tests {
         engine.handle(Request::Pause, start);
         assert!(!engine.advance(start + INTERVAL * 5));
         assert!(engine.snapshot().paused);
-        assert_eq!(engine.snapshot().state.time, Timestamp::EPOCH);
+        assert_eq!(engine.snapshot().view.time, Timestamp::EPOCH);
 
         engine.handle(Request::Resume, start + INTERVAL * 5);
         assert!(engine.advance(start + INTERVAL * 6));
         assert!(!engine.snapshot().paused);
-        assert_eq!(engine.snapshot().state.time, after_ticks(1));
+        assert_eq!(engine.snapshot().view.time, after_ticks(1));
     }
 
     #[test]
@@ -147,7 +154,7 @@ mod tests {
 
         engine.handle(Request::Resume, start + interval * 5);
         assert!(engine.advance(start + interval * 6));
-        assert_eq!(engine.snapshot().state.time, after_ticks(1));
+        assert_eq!(engine.snapshot().view.time, after_ticks(1));
     }
 
     #[test]
@@ -160,7 +167,34 @@ mod tests {
         engine.handle(Request::Command(Command::Reset), start + INTERVAL);
 
         assert!(engine.snapshot().paused);
-        assert_eq!(engine.snapshot().state.time, Timestamp::EPOCH);
+        assert_eq!(engine.snapshot().view.time, Timestamp::EPOCH);
+    }
+
+    #[test]
+    fn capture_holds_the_state_as_it_was_when_asked_for() {
+        let start = Instant::now();
+        let mut engine = engine(start);
+        engine.advance(start + INTERVAL);
+        let (sender, captured) = mpsc::channel();
+
+        engine.handle(Request::Capture(sender), start + INTERVAL);
+        engine.advance(start + INTERVAL * 2);
+
+        let state = captured.try_recv().expect("the state was not captured");
+        assert_eq!(state.time, after_ticks(1));
+        assert_eq!(engine.snapshot().view.time, after_ticks(2));
+    }
+
+    #[test]
+    fn capture_nobody_waits_for_is_dropped() {
+        let start = Instant::now();
+        let mut engine = engine(start);
+        let (sender, captured) = mpsc::channel();
+        drop(captured);
+
+        engine.handle(Request::Capture(sender), start);
+
+        assert!(engine.advance(start + INTERVAL));
     }
 
     #[test]
@@ -186,6 +220,6 @@ mod tests {
         assert_eq!(engine.snapshot().speed, fast);
         assert!(engine.advance(start + interval));
         assert!(engine.advance(start + interval * 2));
-        assert_eq!(engine.snapshot().state.time, after_ticks(2));
+        assert_eq!(engine.snapshot().view.time, after_ticks(2));
     }
 }

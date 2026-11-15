@@ -18,7 +18,7 @@ pub fn show(ctx: &egui::Context, settings: &mut Settings) -> bool {
             .num_columns(2)
             .spacing(ROW_SPACING)
             .show(ui, |ui| {
-                ui.label("Interface size");
+                ui.label("Interface scale");
                 ui_scale(ui, settings);
                 ui.end_row();
 
