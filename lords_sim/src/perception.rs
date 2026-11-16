@@ -5,13 +5,13 @@ use std::collections::BTreeMap;
 use crate::object::Human;
 use crate::space::{Bearing, Length, Location};
 use crate::world::index::Grid;
-use crate::world::{Kind, Subject, ThingId, World};
+use crate::world::{AreaId, Kind, Subject, ThingId, World};
 
 /// How far away things still count as nearby, and are told apart one by one.
 pub const NEARBY: Length = Length::from_meters(10);
 
 /// The farthest anything is seen from.
-const SIGHT_LIMIT: Length = Length::from_meters(300);
+pub const SIGHT_LIMIT: Length = Length::from_meters(300);
 
 /// How many times its own width away a thing can still be made out.
 const ACUITY: i64 = 300;
@@ -56,42 +56,87 @@ pub struct Sighting {
     pub bearing: Bearing,
 }
 
+/// Everything a look takes in.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Seen {
+    pub(crate) surroundings: Surroundings,
+    /// In the order of their ids.
+    pub(crate) things: Vec<ThingId>,
+    /// The edges of the outlines of areas of which some point is seen, each numbered by
+    /// the point of the outline it starts from.
+    pub(crate) shores: Vec<(AreaId, u32)>,
+}
+
 /// Returns what a perceiver whose eyes are above `eye` sees.
-pub(crate) fn look(world: &World, grid: &Grid, eye: Location) -> Surroundings {
-    let things = grid.around(eye, SIGHT_LIMIT).filter_map(|id| {
-        let thing = world.thing(id)?;
+pub(crate) fn look(world: &World, grid: &Grid, eye: Location) -> Seen {
+    let mut sightings = Vec::new();
+    let mut things = Vec::new();
+    let mut shores = Vec::new();
+
+    for id in grid.around(eye, SIGHT_LIMIT) {
+        let Some(thing) = world.thing(id) else {
+            continue;
+        };
         let middle = thing.location();
         let distance = eye.distance_to(middle);
         let width = thing.footprint().as_millimeters() * 2;
         let made_out = distance <= SIGHT_LIMIT && distance.as_millimeters() <= width * ACUITY;
 
-        (made_out && is_clear(world, grid, eye, middle, Some(id))).then(|| Sighting {
-            subject: Subject::Thing(id),
-            kind: thing.kind(),
-            count: 1,
-            distance: (distance - thing.footprint()).max(Length::ZERO),
-            bearing: eye.bearing_to(middle),
-        })
-    });
+        if made_out && is_clear(world, grid, eye, middle, Some(id)) {
+            things.push(id);
+            sightings.push(Sighting {
+                subject: Subject::Thing(id),
+                kind: thing.kind(),
+                count: 1,
+                distance: (distance - thing.footprint()).max(Length::ZERO),
+                bearing: eye.bearing_to(middle),
+            });
+        }
+    }
 
-    let areas = world.areas().filter_map(|(id, area)| {
-        let shore = std::iter::once(area.nearest_shore(eye))
-            .chain(area.outline().iter().copied())
-            .filter(|point| eye.distance_to(*point) <= SIGHT_LIMIT)
-            .filter(|point| is_clear(world, grid, eye, *point, None))
-            .min_by_key(|point| eye.distance_to(*point))?;
+    for (id, area) in world.areas() {
         let subject = Subject::Area(id);
+        let Some(kind) = world.kind(subject) else {
+            continue;
+        };
+        let in_view = |point: Location| {
+            eye.distance_to(point) <= SIGHT_LIMIT && is_clear(world, grid, eye, point, None)
+        };
 
-        Some(Sighting {
-            subject,
-            kind: world.kind(subject)?,
-            count: 1,
-            distance: eye.distance_to(shore),
-            bearing: eye.bearing_to(shore),
-        })
-    });
+        let mut nearest = None;
+        if let Some((edge, point)) = area.nearest_on_shore(eye)
+            && in_view(point)
+        {
+            shores.push((id, edge));
+            nearest = Some(point);
+        }
+        for (edge, point) in (0..).zip(area.outline().iter().copied()) {
+            if in_view(point) {
+                shores.extend([(id, area.edge_before(edge)), (id, edge)]);
+                if nearest.is_none_or(|nearest| eye.distance_to(point) < eye.distance_to(nearest)) {
+                    nearest = Some(point);
+                }
+            }
+        }
 
-    arrange(things.chain(areas).collect())
+        if let Some(shore) = nearest {
+            sightings.push(Sighting {
+                subject,
+                kind,
+                count: 1,
+                distance: eye.distance_to(shore),
+                bearing: eye.bearing_to(shore),
+            });
+        }
+    }
+
+    things.sort_unstable();
+
+    Seen {
+        surroundings: arrange(sightings),
+        things,
+        shores,
+    }
 }
 
 fn arrange(mut sightings: Vec<Sighting>) -> Surroundings {
@@ -187,7 +232,7 @@ mod tests {
     }
 
     fn seen(world: &World) -> Surroundings {
-        look(world, &Grid::new(world), EYE)
+        look(world, &Grid::new(world), EYE).surroundings
     }
 
     #[test]

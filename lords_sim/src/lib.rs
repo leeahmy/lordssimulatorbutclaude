@@ -1,3 +1,5 @@
+pub mod map;
+pub mod memory;
 pub mod object;
 pub mod perception;
 pub mod space;
@@ -9,6 +11,8 @@ use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
+use crate::map::Map;
+use crate::memory::Memory;
 use crate::object::{Activity, Living};
 use crate::perception::Surroundings;
 use crate::time::TICKS_PER_SECOND;
@@ -18,6 +22,7 @@ pub use crate::object::{Human, Name, Sex};
 pub use crate::space::{Bearing, Length, Location};
 pub use crate::time::Timestamp;
 pub use crate::view::View;
+use crate::world::ThingId;
 pub use crate::world::{Subject, World};
 
 /// Version of [`State`] as it is written to disk.
@@ -31,7 +36,12 @@ pub const STATE_VERSION: u32 = 1;
 pub struct Simulation {
     state: State,
     grid: Grid,
+    /// The triangles covering each area of the world, in the order of the areas.
+    surfaces: Vec<Vec<[u32; 3]>>,
     surroundings: Arc<Surroundings>,
+    map: Arc<Map>,
+    /// The things the player saw when they last looked.
+    in_sight: Vec<ThingId>,
 }
 
 impl Simulation {
@@ -50,13 +60,22 @@ impl Simulation {
 
     pub fn from_state(state: State) -> Self {
         let grid = Grid::new(&state.world);
-        let surroundings = perception::look(&state.world, &grid, state.player.location());
+        let surfaces = state
+            .world
+            .areas()
+            .map(|(_, area)| area.triangles())
+            .collect();
 
-        Self {
+        let mut simulation = Self {
             state,
             grid,
-            surroundings: Arc::new(surroundings),
-        }
+            surfaces,
+            surroundings: Arc::default(),
+            map: Arc::default(),
+            in_sight: Vec::new(),
+        };
+        simulation.look();
+        simulation
     }
 
     /// Returns the state of the simulation.
@@ -72,6 +91,7 @@ impl Simulation {
                 destination,
             } => Some(view::Walk {
                 toward: self.state.world.kind(toward)?,
+                destination,
                 remaining: player.location().distance_to(destination),
             }),
         });
@@ -80,6 +100,7 @@ impl Simulation {
             time: self.state.time,
             player: player.clone(),
             surroundings: Arc::clone(&self.surroundings),
+            map: Arc::clone(&self.map),
             walk,
         }
     }
@@ -100,7 +121,7 @@ impl Simulation {
     }
 
     fn walk_to(&mut self, subject: Subject) {
-        if self.surroundings.sighting(subject).is_none() {
+        if !self.state.memory.knows(subject) {
             return;
         }
 
@@ -137,9 +158,34 @@ impl Simulation {
         }
     }
 
+    /// Takes in what the player sees from where they are, and commits it to memory.
     fn look(&mut self) {
-        let eye = self.state.player.location();
-        self.surroundings = Arc::new(perception::look(&self.state.world, &self.grid, eye));
+        let State {
+            player,
+            world,
+            memory,
+            time,
+        } = &mut self.state;
+        let eye = player.location();
+        let seen = perception::look(world, &self.grid, eye);
+
+        for thing in self.in_sight.iter().chain(&seen.things) {
+            memory.note_thing(*thing, *time);
+        }
+        for (area, edge) in &seen.shores {
+            memory.note_edge(*area, *edge);
+        }
+
+        self.map = Arc::new(map::chart(
+            world,
+            &self.grid,
+            &self.surfaces,
+            memory,
+            &seen,
+            eye,
+        ));
+        self.surroundings = Arc::new(seen.surroundings);
+        self.in_sight = seen.things;
     }
 }
 
@@ -148,7 +194,7 @@ impl Simulation {
 pub enum Command {
     /// Rewinds the simulation clock to [`Timestamp::EPOCH`].
     Reset,
-    /// Sends the player walking to something until it is within reach.
+    /// Sends the player walking to something they know of until it is within reach.
     WalkTo(Subject),
     /// Stops the player's current action.
     Stop,
@@ -169,6 +215,9 @@ pub struct State {
 
     #[serde(default)]
     pub world: World,
+
+    #[serde(default)]
+    pub memory: Memory,
 }
 
 impl State {
@@ -178,6 +227,7 @@ impl State {
             player: Human::new(Default::default(), Default::default(), name, sex),
             time: Timestamp::EPOCH,
             world: World::default(),
+            memory: Memory::default(),
         }
     }
 }
@@ -185,8 +235,9 @@ impl State {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::map::Mark;
     use crate::object::Object;
-    use crate::world::{Area, AreaKind, Kind, Plant, PlantSpecies, Thing};
+    use crate::world::{Area, AreaKind, Kind, Plant, PlantSpecies, Rock, Thing};
 
     fn birch(x: i64, y: i64) -> Thing {
         Thing::Plant(Plant::new(
@@ -211,6 +262,37 @@ mod tests {
                 .map(|(x, y)| Location::new(x, y))
                 .collect(),
         )
+    }
+
+    fn tall_boulder(x: i64, y: i64) -> Thing {
+        Thing::Rock(Rock::new(
+            Object::new(Location::new(x, y), Default::default()),
+            Length::from_millimeters(2_500),
+            Length::from_meters(2),
+        ))
+    }
+
+    fn mark(sim: &Simulation, subject: Subject) -> Option<Mark> {
+        let map = sim.view().map;
+        map.things
+            .iter()
+            .copied()
+            .find(|mark| mark.subject == subject)
+    }
+
+    /// A simulation of a player who has walked south out of sight of a tree to the north,
+    /// along with that tree, one that was behind it all the way, and the one walked to.
+    fn walk_away() -> (Simulation, [Subject; 3]) {
+        let mut world = World::default();
+        let left_behind = Subject::Thing(world.add_thing(birch(0, 20_000)));
+        let hidden = Subject::Thing(world.add_thing(birch(0, 40_000)));
+        let walked_to = Subject::Thing(world.add_thing(birch(0, -85_000)));
+        let mut sim = simulation(world);
+
+        sim.apply(Command::WalkTo(walked_to));
+        walk_until_done(&mut sim);
+
+        (sim, [left_behind, hidden, walked_to])
     }
 
     fn simulation(world: World) -> Simulation {
@@ -254,6 +336,7 @@ mod tests {
         assert_eq!(view.time, Timestamp::from_seconds(1));
         assert_eq!(view.player, sim.state().player);
         assert!(view.surroundings.is_empty());
+        assert_eq!(*view.map, Map::default());
         assert_eq!(view.walk, None);
     }
 
@@ -276,6 +359,7 @@ mod tests {
             sim.view().walk,
             Some(view::Walk {
                 toward: Kind::Plant(PlantSpecies::Birch),
+                destination: Location::new(0, 19_450),
                 remaining: Length::from_millimeters(19_450),
             })
         );
@@ -343,6 +427,142 @@ mod tests {
         sim.apply(Command::WalkTo(hidden));
 
         assert_eq!(sim.state().player.activity(), None);
+    }
+
+    #[test]
+    fn map_marks_what_is_in_sight_where_it_stands() {
+        let mut world = World::default();
+        let tree = Subject::Thing(world.add_thing(birch(3_000, 20_000)));
+        let sim = simulation(world);
+
+        assert_eq!(
+            mark(&sim, tree),
+            Some(Mark {
+                subject: tree,
+                kind: Kind::Plant(PlantSpecies::Birch),
+                location: Location::new(3_000, 20_000),
+                footprint: Length::from_millimeters(150),
+                last_seen: None,
+            })
+        );
+    }
+
+    #[test]
+    fn map_keeps_what_was_seen_and_never_has_what_was_not() {
+        let (sim, [left_behind, hidden, walked_to]) = walk_away();
+
+        assert!(sim.view().surroundings.sighting(left_behind).is_none());
+        assert_eq!(
+            mark(&sim, left_behind).map(|mark| mark.in_sight()),
+            Some(false)
+        );
+        assert_eq!(
+            mark(&sim, walked_to).map(|mark| mark.in_sight()),
+            Some(true)
+        );
+        assert_eq!(mark(&sim, hidden), None);
+    }
+
+    #[test]
+    fn thing_left_behind_is_remembered_from_when_it_went_out_of_sight() {
+        let (mut sim, [left_behind, ..]) = walk_away();
+        let lost = Some(Timestamp::from_seconds(51));
+        assert_eq!(
+            mark(&sim, left_behind).map(|mark| mark.last_seen),
+            Some(lost)
+        );
+
+        for _ in 0..100 {
+            sim.tick();
+        }
+
+        assert_eq!(
+            mark(&sim, left_behind).map(|mark| mark.last_seen),
+            Some(lost)
+        );
+    }
+
+    #[test]
+    fn thing_watched_while_standing_still_is_remembered_from_when_the_player_left() {
+        let mut world = World::default();
+        let barely_seen = Subject::Thing(world.add_thing(birch(0, 90_000)));
+        let walked_to = Subject::Thing(world.add_thing(birch(0, -50_000)));
+        let mut sim = simulation(world);
+        for _ in 0..100 {
+            sim.tick();
+        }
+        assert_eq!(
+            mark(&sim, barely_seen).map(|mark| mark.last_seen),
+            Some(None)
+        );
+
+        sim.apply(Command::WalkTo(walked_to));
+        sim.tick();
+
+        assert_eq!(
+            mark(&sim, barely_seen).map(|mark| mark.last_seen),
+            Some(Some(Timestamp::from_seconds(101)))
+        );
+    }
+
+    #[test]
+    fn memory_is_part_of_the_state_a_simulation_carries_on_from() {
+        let (sim, [left_behind, ..]) = walk_away();
+
+        let resumed = Simulation::from_state(sim.state().clone());
+
+        assert_eq!(resumed.state(), sim.state());
+        assert_eq!(resumed.view().map, sim.view().map);
+        assert!(mark(&resumed, left_behind).is_some());
+    }
+
+    #[test]
+    fn walk_can_head_for_what_is_only_remembered() {
+        let (mut sim, [left_behind, hidden, _]) = walk_away();
+
+        sim.apply(Command::WalkTo(hidden));
+        assert_eq!(sim.state().player.activity(), None);
+
+        sim.apply(Command::WalkTo(left_behind));
+        walk_until_done(&mut sim);
+        assert_eq!(sim.state().player.location(), Location::new(0, 19_450));
+    }
+
+    #[test]
+    fn shore_is_mapped_where_it_has_been_seen() {
+        let mut world = World::default();
+        let water = Subject::Area(world.add_area(lake(30_000, 50_000)));
+        world.add_thing(tall_boulder(4_000, 10_000));
+        world.add_thing(tall_boulder(-4_000, 10_000));
+        let mut sim = simulation(world);
+        let corner = |x, y| Location::new(x, y);
+
+        let map = sim.view().map;
+        assert_eq!(map.waters.len(), 1);
+        assert_eq!(map.waters[0].subject, water);
+        assert_eq!(map.waters[0].kind, Kind::Lake);
+        assert_eq!(
+            map.waters[0].shore,
+            [
+                [corner(-20_000, 30_000), corner(20_000, 30_000)],
+                [corner(20_000, 30_000), corner(20_000, 50_000)],
+                [corner(-20_000, 50_000), corner(-20_000, 30_000)],
+            ]
+        );
+        assert_eq!(map.waters[0].surface.len(), 2);
+
+        sim.apply(Command::WalkTo(water));
+        walk_until_done(&mut sim);
+
+        assert_eq!(sim.view().map.waters[0].shore.len(), 4);
+    }
+
+    #[test]
+    fn water_never_seen_is_not_on_the_map() {
+        let mut world = World::default();
+        world.add_area(lake(400_000, 420_000));
+
+        assert!(simulation(world).view().map.waters.is_empty());
     }
 
     #[test]

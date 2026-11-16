@@ -1,3 +1,4 @@
+mod map;
 mod surroundings;
 
 use std::sync::Arc;
@@ -9,7 +10,7 @@ use lords_runtime::{Runtime, Snapshot, Speed};
 use lords_save::{SaveKind, SaveRequest, SimulationId};
 use lords_sim::object::Living;
 use lords_sim::time::gregorian::Date;
-use lords_sim::{Human, State, Timestamp};
+use lords_sim::{Command, Human, State, Subject, Timestamp};
 
 use crate::datetime::DateTimeFormat;
 use crate::icons;
@@ -40,6 +41,14 @@ pub struct Overview {
     last_autosave: Instant,
     last_saved_time: Option<Timestamp>,
     pending_saves: Vec<PendingSave>,
+    map_reach: f32,
+    hovered: Option<Subject>,
+}
+
+#[derive(Debug, Default, PartialEq, Eq)]
+struct Pointed {
+    command: Option<Command>,
+    hovered: Option<Subject>,
 }
 
 struct PendingSave {
@@ -59,6 +68,8 @@ impl Overview {
             last_autosave: Instant::now(),
             last_saved_time: None,
             pending_saves: Vec::new(),
+            map_reach: map::DEFAULT_REACH,
+            hovered: None,
         }
     }
 }
@@ -77,7 +88,10 @@ impl Scene for Overview {
         self.time_bar(ui, &shared.settings.datetime, &snapshot, keyboard_free);
         let mut leave = !self.runtime.is_running() && stopped_banner(ui);
         character_panel(ui, &view.player, view.time, &shared.settings.datetime);
-        if let Some(command) = surroundings::show(ui, view) {
+        let on_map = map::show(ui, view, &mut self.map_reach, self.hovered);
+        let in_list = surroundings::show(ui, view, self.hovered);
+        self.hovered = on_map.hovered.or(in_list.hovered);
+        if let Some(command) = on_map.command.or(in_list.command) {
             self.runtime.send(command);
         }
 
@@ -605,6 +619,47 @@ mod tests {
 
         assert!(!overview.runtime.snapshot().paused);
         assert_eq!(overview.save_dialog, None);
+    }
+
+    #[test]
+    fn clicking_a_thing_on_the_map_sends_the_player_walking_to_it() {
+        let mut harness = Harness::new();
+        let runtime = Runtime::spawn_with(
+            Simulation::generate(Name::default(), Sex::Female, 1),
+            Speed::new(10),
+            true,
+            || {},
+        );
+        let mut overview = Overview::new(runtime, SimulationId::generate(), None);
+        harness.frames(&mut overview, 2);
+
+        let mut around_the_player = (0..8).flat_map(|row| {
+            (0..8).map(move |column| {
+                egui::pos2(770.0 + 8.0 * column as f32, 270.0 + 8.0 * row as f32)
+            })
+        });
+        let spot = around_the_player
+            .find(|spot| {
+                harness.frame(&mut overview, vec![egui::Event::PointerMoved(*spot)]);
+                harness.frame(&mut overview, Vec::new());
+                overview.hovered.is_some()
+            })
+            .expect("the pointer is on something on the map");
+        let pointed_at = overview.hovered.expect("it was just found");
+        let known = overview.runtime.snapshot().view.map.things.clone();
+        assert!(known.iter().any(|mark| mark.subject == pointed_at));
+        assert_eq!(overview.runtime.snapshot().view.walk, None);
+
+        let button = |pressed| egui::Event::PointerButton {
+            pos: spot,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        harness.frame(&mut overview, vec![button(true)]);
+        harness.frame(&mut overview, vec![button(false)]);
+
+        wait_until(|| overview.runtime.snapshot().view.walk.is_some());
     }
 
     #[test]

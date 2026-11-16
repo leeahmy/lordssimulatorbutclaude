@@ -52,16 +52,97 @@ impl Area {
     /// Returns the point of the outline nearest to `from`, which is `from` itself if the
     /// area has no outline.
     pub fn nearest_shore(&self, from: Location) -> Location {
-        self.edges()
-            .map(|(start, end)| nearest_on_edge(start, end, from))
-            .min_by_key(|point| from.distance_to(*point))
-            .unwrap_or(from)
+        self.nearest_on_shore(from).map_or(from, |(_, point)| point)
+    }
+
+    /// Returns the point of the outline nearest to `from`, and the edge it is on.
+    ///
+    /// An edge is numbered by the point of the outline it starts from.
+    pub fn nearest_on_shore(&self, from: Location) -> Option<(u32, Location)> {
+        (0..)
+            .zip(self.edges())
+            .map(|(edge, (start, end))| (edge, nearest_on_edge(start, end, from)))
+            .min_by_key(|(_, point)| from.distance_to(*point))
+    }
+
+    /// Returns the edge that ends where the edge `edge` starts.
+    pub fn edge_before(&self, edge: u32) -> u32 {
+        let edges = (self.outline.len() as u32).max(1);
+        (edge % edges + edges - 1) % edges
+    }
+
+    /// Returns triangles that together cover the area, as the points of the outline at
+    /// their corners.
+    pub fn triangles(&self) -> Vec<[u32; 3]> {
+        let turn_at = |[a, b, c]: [u32; 3]| {
+            turn(
+                self.outline[a as usize],
+                self.outline[b as usize],
+                self.outline[c as usize],
+            )
+        };
+
+        let mut corners: Vec<u32> = (0..self.outline.len() as u32).collect();
+        let doubled_area: i128 = self
+            .edges()
+            .map(|(from, to)| {
+                let ((from_x, from_y), (to_x, to_y)) = (coordinates(from), coordinates(to));
+                from_x * to_y - to_x * from_y
+            })
+            .sum();
+        if doubled_area < 0 {
+            corners.reverse();
+        }
+
+        let mut triangles = Vec::new();
+        while corners.len() >= 3 {
+            let count = corners.len();
+            let around = |at: usize| {
+                [
+                    corners[(at + count - 1) % count],
+                    corners[at],
+                    corners[(at + 1) % count],
+                ]
+            };
+            let is_ear = |at: usize| {
+                let ear = around(at);
+                turn_at(ear) > 0
+                    && !corners.iter().any(|corner| {
+                        let point = self.outline[*corner as usize];
+                        let is_corner = ear.iter().any(|own| self.outline[*own as usize] == point);
+                        let [a, b, c] = ear;
+                        !is_corner
+                            && turn_at([a, b, *corner]) >= 0
+                            && turn_at([b, c, *corner]) >= 0
+                            && turn_at([c, a, *corner]) >= 0
+                    })
+            };
+
+            if let Some(at) = (0..count).find(|at| is_ear(*at)) {
+                triangles.push(around(at));
+                corners.remove(at);
+            } else if let Some(at) = (0..count).find(|at| turn_at(around(*at)) == 0) {
+                corners.remove(at);
+            } else {
+                break;
+            }
+        }
+
+        triangles
     }
 
     fn edges(&self) -> impl Iterator<Item = (Location, Location)> {
         let following = self.outline.iter().cycle().skip(1);
         self.outline.iter().copied().zip(following.copied())
     }
+}
+
+/// Returns a positive number if the way from `a` through `b` to `c` turns left, a negative
+/// one if it turns right, and zero if it goes straight.
+fn turn(a: Location, b: Location, c: Location) -> i128 {
+    let ((a_x, a_y), (b_x, b_y), (c_x, c_y)) = (coordinates(a), coordinates(b), coordinates(c));
+
+    (b_x - a_x) * (c_y - a_y) - (b_y - a_y) * (c_x - a_x)
 }
 
 fn nearest_on_edge(start: Location, end: Location, from: Location) -> Location {
@@ -154,11 +235,54 @@ mod tests {
     }
 
     #[test]
+    fn nearest_shore_is_on_the_edge_numbered_by_where_it_starts() {
+        let lake = lake();
+
+        assert_eq!(
+            lake.nearest_on_shore(Location::new(5_000, -3_000)),
+            Some((0, Location::new(5_000, 0)))
+        );
+        assert_eq!(
+            lake.nearest_on_shore(Location::new(9_000, 7_000)),
+            Some((5, Location::new(8_000, 7_000)))
+        );
+        assert_eq!(lake.edge_before(5), 4);
+        assert_eq!(lake.edge_before(0), 7);
+    }
+
+    #[test]
+    fn triangles_cover_the_area_and_nothing_else() {
+        let doubled_area = |[a, b, c]: [Location; 3]| turn(a, b, c).abs();
+
+        for outline in [lake().outline, lake().outline.into_iter().rev().collect()] {
+            let lake = Area::new(AreaKind::Lake, outline);
+            let triangles: Vec<[Location; 3]> = lake
+                .triangles()
+                .into_iter()
+                .map(|corners| corners.map(|corner| lake.outline[corner as usize]))
+                .collect();
+
+            assert_eq!(triangles.len(), 6);
+            assert_eq!(
+                triangles.iter().copied().map(doubled_area).sum::<i128>(),
+                2 * (20_000 * 10_000 - 4_000 * 6_000)
+            );
+            for [a, b, c] in triangles {
+                let middle =
+                    Location::new((a.x() + b.x() + c.x()) / 3, (a.y() + b.y() + c.y()) / 3);
+                assert!(lake.contains(middle), "{a:?}, {b:?}, {c:?}");
+            }
+        }
+    }
+
+    #[test]
     fn area_without_an_outline_holds_nothing() {
         let nothing = Area::new(AreaKind::Lake, Vec::new());
         let somewhere = Location::new(1, 2);
 
         assert!(!nothing.contains(somewhere));
         assert_eq!(nothing.nearest_shore(somewhere), somewhere);
+        assert_eq!(nothing.nearest_on_shore(somewhere), None);
+        assert!(nothing.triangles().is_empty());
     }
 }

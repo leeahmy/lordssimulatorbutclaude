@@ -15,9 +15,21 @@ use crate::space::{Length, Location};
 #[serde(transparent)]
 pub struct ThingId(u32);
 
+impl ThingId {
+    pub(crate) const fn index(self) -> u32 {
+        self.0
+    }
+}
+
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct AreaId(u32);
+
+impl AreaId {
+    pub(crate) const fn index(self) -> u32 {
+        self.0
+    }
+}
 
 /// Anything in the world that can be pointed out.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]

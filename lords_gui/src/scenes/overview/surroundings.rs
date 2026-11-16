@@ -2,7 +2,9 @@ use egui::RichText;
 use lords_sim::perception::Sighting;
 use lords_sim::view::Walk;
 use lords_sim::world::{Kind, PlantSpecies};
-use lords_sim::{Bearing, Command, Length, View};
+use lords_sim::{Bearing, Command, Length, Subject, View};
+
+use super::Pointed;
 
 const ROW_SPACING: egui::Vec2 = egui::vec2(16.0, 6.0);
 const SECTION_SPACING: f32 = 12.0;
@@ -12,15 +14,16 @@ const COLUMN_WIDTH: f32 = 90.0;
 /// How many rows of a section show at most without scrolling.
 const ROWS_SHOWN: f32 = 5.0;
 
-pub fn show(ui: &mut egui::Ui, view: &View) -> Option<Command> {
-    let mut command = None;
+pub fn show(ui: &mut egui::Ui, view: &View, highlighted: Option<Subject>) -> Pointed {
+    let mut pointed = Pointed::default();
+    let highlighted = highlighted.and_then(|subject| row_of(view, subject));
 
     egui::CentralPanel::default().show(ui, |ui| {
         egui::ScrollArea::vertical()
             .auto_shrink(false)
             .show(ui, |ui| {
                 if activity(ui, view.walk) {
-                    command = Some(Command::Stop);
+                    pointed.command = Some(Command::Stop);
                 }
 
                 let surroundings = &view.surroundings;
@@ -34,17 +37,38 @@ pub fn show(ui: &mut egui::Ui, view: &View) -> Option<Command> {
                         .map(|(sighting, within_reach)| Row {
                             sighting,
                             within_reach,
+                            highlighted: highlighted == Some(sighting.subject),
                         })
                         .collect();
 
-                    if let Some(sighting) = section(ui, category, &rows) {
-                        command = Some(Command::WalkTo(sighting.subject));
+                    let section = section(ui, category, &rows);
+                    if let Some(subject) = section.chosen {
+                        pointed.command = Some(Command::WalkTo(subject));
                     }
+                    pointed.hovered = pointed.hovered.or(section.hovered);
                 }
             });
     });
 
-    command
+    pointed
+}
+
+fn row_of(view: &View, subject: Subject) -> Option<Subject> {
+    let surroundings = &view.surroundings;
+    if surroundings.sighting(subject).is_some() {
+        return Some(subject);
+    }
+
+    let mark = view
+        .map
+        .things
+        .iter()
+        .find(|mark| mark.subject == subject)?;
+    surroundings
+        .in_sight
+        .iter()
+        .find(|sighting| mark.in_sight() && sighting.kind == mark.kind)
+        .map(|sighting| sighting.subject)
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -77,6 +101,13 @@ impl Category {
 struct Row<'a> {
     sighting: &'a Sighting,
     within_reach: bool,
+    highlighted: bool,
+}
+
+#[derive(Default)]
+struct Section {
+    chosen: Option<Subject>,
+    hovered: Option<Subject>,
 }
 
 fn activity(ui: &mut egui::Ui, walk: Option<Walk>) -> bool {
@@ -103,8 +134,8 @@ fn activity(ui: &mut egui::Ui, walk: Option<Walk>) -> bool {
     stop
 }
 
-fn section<'a>(ui: &mut egui::Ui, category: Category, rows: &[Row<'a>]) -> Option<&'a Sighting> {
-    let mut chosen = None;
+fn section(ui: &mut egui::Ui, category: Category, rows: &[Row<'_>]) -> Section {
+    let mut section = Section::default();
     let seen: u32 = rows.iter().map(|row| row.sighting.count).sum();
     let row_height = ui.spacing().interact_size.y + ROW_SPACING.y;
 
@@ -130,15 +161,25 @@ fn section<'a>(ui: &mut egui::Ui, category: Category, rows: &[Row<'a>]) -> Optio
                 .show(ui, |ui| {
                     for row in rows {
                         let sighting = row.sighting;
-                        ui.label(label(sighting));
-                        ui.label(RichText::new(compass_point(sighting.bearing)).weak());
-                        if row.within_reach {
-                            ui.label(RichText::new("within reach").weak());
+                        let label = RichText::new(label(sighting));
+                        let mut shown = ui.label(if row.highlighted {
+                            label.strong()
                         } else {
-                            ui.label(RichText::new(distance_to(sighting)).weak());
-                            if ui.button("Walk to").clicked() {
-                                chosen = Some(sighting);
+                            label
+                        });
+                        shown |= ui.label(RichText::new(compass_point(sighting.bearing)).weak());
+                        if row.within_reach {
+                            shown |= ui.label(RichText::new("within reach").weak());
+                        } else {
+                            shown |= ui.label(RichText::new(distance_to(sighting)).weak());
+                            let walk = ui.button("Walk to");
+                            if walk.clicked() {
+                                section.chosen = Some(sighting.subject);
                             }
+                            shown |= walk;
+                        }
+                        if ui.rect_contains_pointer(shown.rect) {
+                            section.hovered = Some(sighting.subject);
                         }
                         ui.end_row();
                     }
@@ -146,7 +187,7 @@ fn section<'a>(ui: &mut egui::Ui, category: Category, rows: &[Row<'a>]) -> Optio
         });
     ui.add_space(SECTION_SPACING);
 
-    chosen
+    section
 }
 
 fn label(sighting: &Sighting) -> String {
@@ -158,7 +199,7 @@ fn label(sighting: &Sighting) -> String {
     }
 }
 
-fn name(kind: Kind) -> &'static str {
+pub(super) fn name(kind: Kind) -> &'static str {
     match kind {
         Kind::Plant(PlantSpecies::Spruce) => "Spruce",
         Kind::Plant(PlantSpecies::Pine) => "Pine",
@@ -177,7 +218,7 @@ fn distance_to(sighting: &Sighting) -> String {
     }
 }
 
-fn distance(length: Length) -> String {
+pub(super) fn distance(length: Length) -> String {
     let millimeters = length.as_millimeters();
     if millimeters < 1_000 {
         return "under 1 m".to_owned();
@@ -210,7 +251,7 @@ fn compass_point(bearing: Bearing) -> &'static str {
 #[cfg(test)]
 mod tests {
     use lords_sim::world::{Area, AreaKind};
-    use lords_sim::{Name, Sex, Simulation, Subject, World};
+    use lords_sim::{Name, Sex, Simulation, World};
 
     use super::*;
     use crate::scenes::harness::Harness;
@@ -267,13 +308,38 @@ mod tests {
             .expect("there is something in sight")
             .subject;
 
-        harness.show(|ui| assert_eq!(show(ui, &empty), None));
-        harness.show(|ui| assert_eq!(show(ui, &forest.view()), None));
+        harness.show(|ui| assert_eq!(show(ui, &empty, None), Pointed::default()));
+        harness.show(|ui| {
+            assert_eq!(show(ui, &forest.view(), Some(target)), Pointed::default());
+        });
 
         forest.apply(Command::WalkTo(target));
         forest.tick();
         let walking = forest.view();
         assert!(walking.walk.is_some());
-        harness.show(|ui| assert_eq!(show(ui, &walking), None));
+        harness.show(|ui| assert_eq!(show(ui, &walking, None), Pointed::default()));
+    }
+
+    #[test]
+    fn row_of_something_far_away_is_that_of_the_nearest_of_its_kind() {
+        let view = Simulation::generate(Name::default(), Sex::Female, 1).view();
+        let group = view
+            .surroundings
+            .in_sight
+            .iter()
+            .find(|sighting| sighting.count > 1)
+            .expect("there are several of some kind in sight");
+        let another = view
+            .map
+            .things
+            .iter()
+            .filter(|mark| mark.kind == group.kind)
+            .find(|mark| view.surroundings.sighting(mark.subject).is_none())
+            .expect("the group has another in it");
+        let nearby = view.surroundings.sightings().next().expect("the first");
+
+        assert_eq!(row_of(&view, group.subject), Some(group.subject));
+        assert_eq!(row_of(&view, another.subject), Some(group.subject));
+        assert_eq!(row_of(&view, nearby.subject), Some(nearby.subject));
     }
 }
