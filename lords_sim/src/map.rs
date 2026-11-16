@@ -3,7 +3,7 @@ use crate::perception::{SIGHT_LIMIT, Seen};
 use crate::space::{Length, Location};
 use crate::time::Timestamp;
 use crate::world::index::Grid;
-use crate::world::{Kind, Subject, World};
+use crate::world::{Area, AreaId, Kind, Subject, World};
 
 /// How far from the character the map reaches.
 pub const RANGE: Length = SIGHT_LIMIT;
@@ -41,13 +41,37 @@ pub struct Water {
     pub surface: Vec<[Location; 3]>,
 }
 
+/// The triangles that cover an area between the stretches of its shore that are known, cut
+/// straight across where the shore is not.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct Surface {
+    corners: Vec<u32>,
+    triangles: Vec<[u32; 3]>,
+}
+
+impl Surface {
+    /// Works the triangles out again if `memory` knows more of the shore than it did.
+    pub(crate) fn update(&mut self, id: AreaId, area: &Area, memory: &Memory) {
+        let corners: Vec<u32> = (0..area.outline().len() as u32)
+            .filter(|corner| {
+                memory.knows_edge(id, *corner) || memory.knows_edge(id, area.edge_before(*corner))
+            })
+            .collect();
+
+        if corners != self.corners {
+            self.triangles = area.triangles(&corners);
+            self.corners = corners;
+        }
+    }
+}
+
 /// Returns the map of a character at `eye` who remembers `memory` and now sees `seen`.
 ///
-/// `surfaces` are the triangles of each area of `world`, in the order of the areas.
+/// `surfaces` are those of the areas of `world`, in the order of the areas.
 pub(crate) fn chart(
     world: &World,
     grid: &Grid,
-    surfaces: &[Vec<[u32; 3]>],
+    surfaces: &[Surface],
     memory: &Memory,
     seen: &Seen,
     eye: Location,
@@ -74,22 +98,19 @@ pub(crate) fn chart(
     let waters = world
         .areas()
         .zip(surfaces)
-        .filter_map(|((id, area), triangles)| {
+        .filter_map(|((id, area), surface)| {
             let subject = Subject::Area(id);
             let outline = area.outline();
             let point = |corner: u32| outline[corner as usize];
-            let corner_known = |corner: u32| {
-                memory.knows_edge(id, corner) || memory.knows_edge(id, area.edge_before(corner))
-            };
 
             let shore: Vec<[Location; 2]> = (0..outline.len() as u32)
                 .filter(|edge| memory.knows_edge(id, *edge))
                 .map(|edge| [point(edge), point((edge + 1) % outline.len() as u32)])
                 .filter(|ends| ends.iter().any(in_range))
                 .collect();
-            let surface = triangles
+            let surface = surface
+                .triangles
                 .iter()
-                .filter(|corners| corners.iter().all(|corner| corner_known(*corner)))
                 .map(|corners| corners.map(point))
                 .filter(|corners| corners.iter().any(in_range))
                 .collect();

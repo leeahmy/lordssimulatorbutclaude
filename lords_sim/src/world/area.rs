@@ -71,9 +71,9 @@ impl Area {
         (edge % edges + edges - 1) % edges
     }
 
-    /// Returns triangles that together cover the area, as the points of the outline at
-    /// their corners.
-    pub fn triangles(&self) -> Vec<[u32; 3]> {
+    /// Returns triangles that together cover the shape that has the points `corners` of
+    /// the outline at its corners, in that order, as the points at the corners of each.
+    pub fn triangles(&self, corners: &[u32]) -> Vec<[u32; 3]> {
         let turn_at = |[a, b, c]: [u32; 3]| {
             turn(
                 self.outline[a as usize],
@@ -82,11 +82,13 @@ impl Area {
             )
         };
 
-        let mut corners: Vec<u32> = (0..self.outline.len() as u32).collect();
-        let doubled_area: i128 = self
-            .edges()
+        let mut corners = corners.to_vec();
+        let doubled_area: i128 = corners
+            .iter()
+            .zip(corners.iter().cycle().skip(1))
             .map(|(from, to)| {
-                let ((from_x, from_y), (to_x, to_y)) = (coordinates(from), coordinates(to));
+                let (from_x, from_y) = coordinates(self.outline[*from as usize]);
+                let (to_x, to_y) = coordinates(self.outline[*to as usize]);
                 from_x * to_y - to_x * from_y
             })
             .sum();
@@ -257,7 +259,7 @@ mod tests {
         for outline in [lake().outline, lake().outline.into_iter().rev().collect()] {
             let lake = Area::new(AreaKind::Lake, outline);
             let triangles: Vec<[Location; 3]> = lake
-                .triangles()
+                .triangles(&[0, 1, 2, 3, 4, 5, 6, 7])
                 .into_iter()
                 .map(|corners| corners.map(|corner| lake.outline[corner as usize]))
                 .collect();
@@ -276,6 +278,24 @@ mod tests {
     }
 
     #[test]
+    fn triangles_cut_straight_across_between_the_corners_given() {
+        let lake = lake();
+        let point = |corner: u32| lake.outline[corner as usize];
+        let doubled_area = |corners: &[u32]| -> i128 {
+            lake.triangles(corners)
+                .into_iter()
+                .map(|[a, b, c]| turn(point(a), point(b), point(c)).abs())
+                .sum()
+        };
+
+        assert_eq!(doubled_area(&[0, 1, 2, 7]), 2 * 20_000 * 10_000);
+        assert_eq!(doubled_area(&[0, 1, 2]), 20_000 * 10_000);
+        assert_eq!(doubled_area(&[7, 2, 1, 0]), 2 * 20_000 * 10_000);
+        assert!(lake.triangles(&[0, 1]).is_empty());
+        assert!(lake.triangles(&[]).is_empty());
+    }
+
+    #[test]
     fn area_without_an_outline_holds_nothing() {
         let nothing = Area::new(AreaKind::Lake, Vec::new());
         let somewhere = Location::new(1, 2);
@@ -283,6 +303,6 @@ mod tests {
         assert!(!nothing.contains(somewhere));
         assert_eq!(nothing.nearest_shore(somewhere), somewhere);
         assert_eq!(nothing.nearest_on_shore(somewhere), None);
-        assert!(nothing.triangles().is_empty());
+        assert!(nothing.triangles(&[]).is_empty());
     }
 }

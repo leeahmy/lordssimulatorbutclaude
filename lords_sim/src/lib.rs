@@ -11,7 +11,7 @@ use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
-use crate::map::Map;
+use crate::map::{Map, Surface};
 use crate::memory::Memory;
 use crate::object::{Activity, Living};
 use crate::perception::Surroundings;
@@ -37,7 +37,7 @@ pub struct Simulation {
     state: State,
     grid: Grid,
     /// The triangles covering each area of the world, in the order of the areas.
-    surfaces: Vec<Vec<[u32; 3]>>,
+    surfaces: Vec<Surface>,
     surroundings: Arc<Surroundings>,
     map: Arc<Map>,
     /// The things the player saw when they last looked.
@@ -60,11 +60,7 @@ impl Simulation {
 
     pub fn from_state(state: State) -> Self {
         let grid = Grid::new(&state.world);
-        let surfaces = state
-            .world
-            .areas()
-            .map(|(_, area)| area.triangles())
-            .collect();
+        let surfaces = state.world.areas().map(|_| Surface::default()).collect();
 
         let mut simulation = Self {
             state,
@@ -174,6 +170,9 @@ impl Simulation {
         }
         for (area, edge) in &seen.shores {
             memory.note_edge(*area, *edge);
+        }
+        for ((id, area), surface) in world.areas().zip(&mut self.surfaces) {
+            surface.update(id, area, memory);
         }
 
         self.map = Arc::new(map::chart(
@@ -555,6 +554,49 @@ mod tests {
         walk_until_done(&mut sim);
 
         assert_eq!(sim.view().map.waters[0].shore.len(), 4);
+    }
+
+    #[test]
+    fn water_is_cut_straight_across_where_its_shore_has_not_been_seen() {
+        let mut world = World::default();
+        let water = Subject::Area(world.add_area(lake(30_000, 50_000)));
+        world.add_thing(tall_boulder(-4_000, 6_000));
+        world.add_thing(tall_boulder(-4_000, 10_000));
+        world.add_thing(tall_boulder(4_000, 10_000));
+        let mut sim = simulation(world);
+        let southwest = Location::new(-20_000, 30_000);
+        let southeast = Location::new(20_000, 30_000);
+        let northeast = Location::new(20_000, 50_000);
+
+        let map = sim.view().map;
+        assert_eq!(
+            map.waters[0].shore,
+            [[southwest, southeast], [southeast, northeast]]
+        );
+        assert_eq!(map.waters[0].surface.len(), 1);
+        for corner in [southwest, southeast, northeast] {
+            assert!(map.waters[0].surface[0].contains(&corner));
+        }
+
+        sim.apply(Command::WalkTo(water));
+        walk_until_done(&mut sim);
+
+        assert_eq!(sim.view().map.waters[0].surface.len(), 2);
+    }
+
+    #[test]
+    fn single_stretch_of_shore_has_no_water_drawn_inside_it() {
+        let mut world = World::default();
+        world.add_area(lake(30_000, 50_000));
+        for x in [-4_000, 4_000] {
+            world.add_thing(tall_boulder(x, 6_000));
+            world.add_thing(tall_boulder(x, 10_000));
+        }
+
+        let map = simulation(world).view().map;
+
+        assert_eq!(map.waters[0].shore.len(), 1);
+        assert!(map.waters[0].surface.is_empty());
     }
 
     #[test]
