@@ -14,8 +14,6 @@ Packages for all three systems are attached to each
 - **Windows:** unzip and run `lords_simulator.exe`.
 - **Linux:** unpack the `tar.gz` and run `lords_simulator`.
 - **macOS:** unzip `Lords-Simulator-…-macos-universal.zip` and open the app. The `tar.gz` holds the same program.
-  The app is not notarized, so macOS refuses to open it the first time; allow it under
-  System Settings → Privacy & Security.
 
 ## Building
 
