@@ -31,7 +31,7 @@ impl Scene for MainMenu {
         let menu = top_panel(ui, false);
         self.refresh_saves(shared);
 
-        self.bottom_panel(ui);
+        bottom_panel(ui);
         let mut response = self.central_panel(ui, shared);
 
         if !shared.settings.fullscreen_prompt_seen {
@@ -61,21 +61,6 @@ impl MainMenu {
             generation,
             any: !list.saves.is_empty() || !list.unreadable.is_empty(),
             newest: list.saves.into_iter().find(|save| save.problem().is_none()),
-        });
-    }
-
-    fn bottom_panel(&self, ui: &mut egui::Ui) {
-        egui::Panel::bottom("bottom_panel").show(ui, |ui| {
-            ui.horizontal(|ui| {
-                egui::warn_if_debug_build(ui);
-
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.add(egui::github_link_file!(
-                        "https://github.com/thelordman/lords_simulator/blob/main/",
-                        "Source Code"
-                    ));
-                });
-            });
         });
     }
 
@@ -136,6 +121,21 @@ impl MainMenu {
 
         response
     }
+}
+
+fn bottom_panel(ui: &mut egui::Ui) {
+    egui::Panel::bottom("bottom_panel").show(ui, |ui| {
+        ui.horizontal(|ui| {
+            egui::warn_if_debug_build(ui);
+
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.add(egui::github_link_file!(
+                    "https://github.com/thelordman/lords_simulator/blob/main/",
+                    "Source Code"
+                ));
+            });
+        });
+    });
 }
 
 fn menu_button(ui: &mut egui::Ui, text: &str, enabled: bool) -> egui::Response {

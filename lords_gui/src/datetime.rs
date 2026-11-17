@@ -1,12 +1,12 @@
 use std::fmt::{self, Display, Formatter, Write};
 
 use lords_sim::Timestamp;
-use lords_sim::time::gregorian::{Date, TimeOfDay};
+use lords_sim::time::gregorian::{Date, SECONDS_PER_DAY, TimeOfDay};
 use serde::{Deserialize, Serialize};
 
 /// How dates and times are written out.
 ///
-/// The default is `DD.MM.YYYY HH:MM:SS`.
+/// The default is `D.M.Y HH:MM:SS`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct DateTimeFormat {
@@ -129,15 +129,11 @@ impl Display for TimeSeparator {
 
 /// A moment whose date reads unambiguously in every [`DateOrder`]: 31 December 2024, one
 /// second to midnight.
-pub const SAMPLE: Timestamp = Timestamp::from_seconds(739_250 * 86_400 + 86_399);
+pub const SAMPLE: Timestamp = Timestamp::from_seconds(739_251 * SECONDS_PER_DAY - 1);
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// 9 March of year 7, at 04:05:06.
-    const EARLY: Timestamp =
-        Timestamp::from_seconds((6 * 365 + 1 + 31 + 28 + 8) * 86_400 + 4 * 3_600 + 5 * 60 + 6);
 
     #[test]
     fn default_format_is_day_first_with_periods_and_colons() {

@@ -182,14 +182,8 @@ fn is_clear(
 /// Returns whether the straight line between `from` and `to` comes within `radius` of
 /// `middle`.
 fn crosses(from: Location, to: Location, middle: Location, radius: Length) -> bool {
-    let offset = |start: Location, end: Location| {
-        (
-            i128::from(end.x()) - i128::from(start.x()),
-            i128::from(end.y()) - i128::from(start.y()),
-        )
-    };
-    let (line_x, line_y) = offset(from, to);
-    let (middle_x, middle_y) = offset(from, middle);
+    let (line_x, line_y) = from.offset_to(to);
+    let (middle_x, middle_y) = from.offset_to(middle);
     let radius = i128::from(radius.as_millimeters());
 
     let along = middle_x * line_x + middle_y * line_y;
@@ -198,7 +192,7 @@ fn crosses(from: Location, to: Location, middle: Location, radius: Length) -> bo
     if along <= 0 {
         middle_x * middle_x + middle_y * middle_y <= radius * radius
     } else if along >= length_squared {
-        let (end_x, end_y) = offset(to, middle);
+        let (end_x, end_y) = to.offset_to(middle);
         end_x * end_x + end_y * end_y <= radius * radius
     } else {
         let aside = line_x * middle_y - line_y * middle_x;

@@ -1,10 +1,10 @@
-use std::fmt;
-use std::fmt::{Display, Formatter};
+use std::fmt::{self, Display, Formatter};
+use std::iter;
 
 use serde::{Deserialize, Serialize};
 
-use crate::Timestamp;
 use crate::space::{Length, Location};
+use crate::time::Timestamp;
 use crate::world::Subject;
 
 #[derive(Default, Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -84,9 +84,11 @@ impl Name {
     pub fn first(&self) -> &str {
         &self.first
     }
+
     pub fn middle(&self) -> &[String] {
         &self.middle
     }
+
     pub fn last(&self) -> &str {
         &self.last
     }
@@ -96,19 +98,23 @@ impl Name {
     }
 
     pub fn parts(&self) -> impl Iterator<Item = &str> {
-        std::iter::once(self.first.as_str())
+        iter::once(self.first.as_str())
             .chain(self.middle.iter().map(String::as_str))
-            .chain(std::iter::once(self.last.as_str()))
+            .chain(iter::once(self.last.as_str()))
     }
 }
 
 impl Display for Name {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.first)?;
-        for m in &self.middle {
-            write!(f, " {m}")?;
+        let mut parts = self.parts().filter(|part| !part.is_empty());
+
+        if let Some(first) = parts.next() {
+            f.write_str(first)?;
         }
-        write!(f, " {}", self.last)
+        for part in parts {
+            write!(f, " {part}")?;
+        }
+        Ok(())
     }
 }
 
@@ -119,8 +125,11 @@ pub enum Sex {
 }
 
 impl Display for Sex {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{:?}", self)
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::Male => "Male",
+            Self::Female => "Female",
+        })
     }
 }
 
@@ -152,18 +161,23 @@ impl Human {
 
 pub trait Living {
     fn animal(&self) -> &Animal;
+
     fn location(&self) -> Location {
         self.animal().object.location()
     }
+
     fn activity(&self) -> Option<Activity> {
         self.animal().activity
     }
+
     fn name(&self) -> &Name {
         &self.animal().name
     }
+
     fn sex(&self) -> Sex {
         self.animal().sex
     }
+
     fn birth(&self) -> Timestamp {
         self.animal().object.creation()
     }
@@ -172,5 +186,27 @@ pub trait Living {
 impl Living for Human {
     fn animal(&self) -> &Animal {
         &self.animal
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn name_is_written_with_one_space_between_the_parts_it_has() {
+        let name = |first: &str, middle: &[&str], last: &str| {
+            let middle = middle.iter().map(|part| (*part).to_owned()).collect();
+            Name::new(first.to_owned(), middle, last.to_owned()).to_string()
+        };
+
+        assert_eq!(
+            name("Ada", &["Maria", "Mäki"], "Lord"),
+            "Ada Maria Mäki Lord"
+        );
+        assert_eq!(name("Ada", &[], "Lord"), "Ada Lord");
+        assert_eq!(name("", &[], "Lord"), "Lord");
+        assert_eq!(name("Ada", &[""], ""), "Ada");
+        assert_eq!(Name::default().to_string(), "");
     }
 }

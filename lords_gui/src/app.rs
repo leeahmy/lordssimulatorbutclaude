@@ -7,6 +7,7 @@ use lords_runtime::{Runtime, Speed};
 use lords_save::{LoadedSave, SaveKind, SimulationId};
 use lords_sim::Simulation;
 
+use crate::playthrough::Playthrough;
 use crate::saves::Saves;
 use crate::scenes::{
     AppAction, MainMenu, Overview, Scene, SceneResponse, Shared, TOGGLE_FULLSCREEN,
@@ -118,7 +119,11 @@ impl App {
             ctx.request_repaint();
         });
 
-        Box::new(Overview::new(runtime, playthrough, save_label))
+        Box::new(Overview::new(Playthrough::new(
+            runtime,
+            playthrough,
+            save_label,
+        )))
     }
 
     fn enter(&mut self, next: Box<dyn Scene>) {

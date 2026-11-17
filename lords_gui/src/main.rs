@@ -3,16 +3,13 @@
 fn main() -> eframe::Result {
     env_logger::init();
 
+    let icon = eframe::icon_data::from_png_bytes(include_bytes!("../../assets/icon-256.png"))
+        .expect("the icon built into the game is not a PNG image");
     let native_options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_app_id(lords_gui::APP_ID)
             .with_maximized(true)
-            .with_icon(
-                eframe::icon_data::from_png_bytes(&include_bytes!("../../assets/icon-256.png")[..])
-                    .expect(
-                        "Failed to decode icon from binary, which means the embedded PNG data is malformed."
-                    ),
-            ),
+            .with_icon(icon),
         ..Default::default()
     };
 

@@ -50,11 +50,8 @@ impl World {
 
         let mut world = Self::default();
         world.add_area(lake);
-        for boulder in boulders {
-            world.add_thing(Thing::Rock(boulder));
-        }
-        for tree in trees {
-            world.add_thing(Thing::Plant(tree));
+        for thing in boulders.into_iter().chain(trees) {
+            world.add_thing(thing);
         }
         world
     }
@@ -85,7 +82,7 @@ fn lake(rng: &mut Rng) -> Area {
     Area::new(AreaKind::Lake, outline)
 }
 
-fn boulders(rng: &mut Rng, lake: &Area) -> Vec<Rock> {
+fn boulders(rng: &mut Rng, lake: &Area) -> Vec<Thing> {
     let mut boulders = Vec::new();
 
     for _ in 0..BOULDERS {
@@ -97,18 +94,18 @@ fn boulders(rng: &mut Rng, lake: &Area) -> Vec<Rock> {
         let height = diameter * rng.between(BOULDER_HEIGHT_PERCENT) / 100;
 
         if is_free(location, diameter / 2, lake) {
-            boulders.push(Rock::new(
+            boulders.push(Thing::Rock(Rock::new(
                 object(location),
                 Length::from_millimeters(diameter),
                 Length::from_millimeters(height),
-            ));
+            )));
         }
     }
 
     boulders
 }
 
-fn trees(rng: &mut Rng, lake: &Area, boulders: &[Rock]) -> Vec<Plant> {
+fn trees(rng: &mut Rng, lake: &Area, boulders: &[Thing]) -> Vec<Thing> {
     let patches_per_side = 2 * EXTENT / PATCH + 1;
     let spruce_patches: Vec<bool> = (0..patches_per_side * patches_per_side)
         .map(|_| rng.chance(50))
@@ -118,14 +115,6 @@ fn trees(rng: &mut Rng, lake: &Area, boulders: &[Rock]) -> Vec<Plant> {
         let row = (location.y() + EXTENT) / PATCH;
         spruce_patches[(row * patches_per_side + column) as usize]
     };
-
-    let boulders: Vec<(Location, i64)> = boulders
-        .iter()
-        .map(|boulder| {
-            let boulder = Thing::Rock(boulder.clone());
-            (boulder.location(), boulder.footprint().as_millimeters())
-        })
-        .collect();
 
     let places_per_side = 2 * EXTENT / TREE_SPACING;
     let jitter = (TREE_SPACING / 10, TREE_SPACING * 9 / 10);
@@ -146,19 +135,20 @@ fn trees(rng: &mut Rng, lake: &Area, boulders: &[Rock]) -> Vec<Plant> {
             let species = species(rng, by_the_shore, is_spruce_patch(location));
 
             let radius = trunk_diameter / 2;
-            let on_a_boulder = boulders.iter().any(|(boulder, footprint)| {
-                location.distance_to(*boulder).as_millimeters() <= footprint + radius
+            let on_a_boulder = boulders.iter().any(|boulder| {
+                let room = boulder.footprint() + Length::from_millimeters(radius);
+                location.distance_to(boulder.location()) <= room
             });
             if rng.chance(TREE_GAP_PERCENT) || on_a_boulder || !is_free(location, radius, lake) {
                 continue;
             }
 
-            trees.push(Plant::new(
+            trees.push(Thing::Plant(Plant::new(
                 object(location),
                 species,
                 Length::from_millimeters(height),
                 Length::from_millimeters(trunk_diameter),
-            ));
+            )));
         }
     }
 
@@ -193,8 +183,8 @@ fn species(rng: &mut Rng, by_the_shore: bool, spruce_patch: bool) -> PlantSpecie
     }
 }
 
-/// Returns whether something of `radius` can stand at `location`. (On dry ground and
-/// outside the clearing.)
+/// Returns whether something of `radius` can stand at `location`, which it can on dry
+/// ground outside the clearing.
 fn is_free(location: Location, radius: i64, lake: &Area) -> bool {
     let from_center = Location::default().distance_to(location).as_millimeters();
 

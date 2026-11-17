@@ -35,7 +35,7 @@ impl Thing {
             Self::Plant(plant) => plant.trunk_diameter,
             Self::Rock(rock) => rock.diameter,
         };
-        Length::from_millimeters(diameter.as_millimeters() / 2)
+        diameter / 2
     }
 
     pub fn height(&self) -> Length {

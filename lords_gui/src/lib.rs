@@ -2,6 +2,7 @@ mod app;
 mod datetime;
 mod icons;
 mod options;
+mod playthrough;
 mod saves;
 mod scenes;
 mod settings;

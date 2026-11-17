@@ -7,9 +7,9 @@ use std::fmt::{self, Display, Formatter};
 
 use crate::time::Timestamp;
 
-const SECONDS_PER_MINUTE: u64 = 60;
-const SECONDS_PER_HOUR: u64 = 60 * SECONDS_PER_MINUTE;
-const SECONDS_PER_DAY: u64 = 24 * SECONDS_PER_HOUR;
+pub const SECONDS_PER_MINUTE: u64 = 60;
+pub const SECONDS_PER_HOUR: u64 = 60 * SECONDS_PER_MINUTE;
+pub const SECONDS_PER_DAY: u64 = 24 * SECONDS_PER_HOUR;
 
 const DAYS_PER_COMMON_YEAR: u64 = 365;
 

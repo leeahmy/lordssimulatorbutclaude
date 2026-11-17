@@ -5,10 +5,11 @@ use crate::time::Timestamp;
 use crate::world::index::Grid;
 use crate::world::{Area, AreaId, Kind, Subject, World};
 
-/// How far from the character the map reaches.
+/// How far the map reaches to the north, east, south, and west of the character.
 pub const RANGE: Length = SIGHT_LIMIT;
 
-/// What a character sees or remembers within [`RANGE`] of where it stands.
+/// What a character sees or remembers in the square that reaches [`RANGE`] each way from
+/// where it stands.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Map {
     pub things: Vec<Mark>,
@@ -76,16 +77,22 @@ pub(crate) fn chart(
     seen: &Seen,
     eye: Location,
 ) -> Map {
-    let in_range = |point: &Location| eye.distance_to(*point) <= RANGE;
+    let in_range = |point: &Location| {
+        let (east, north) = eye.offset_to(*point);
+        east.abs().max(north.abs()) <= i128::from(RANGE.as_millimeters())
+    };
 
     let things = grid
         .around(eye, RANGE)
         .filter_map(|id| {
             let thing = world.thing(id)?;
             let last_seen = memory.last_seen(id)?;
+            if !in_range(&thing.location()) {
+                return None;
+            }
             let in_sight = seen.things.binary_search(&id).is_ok();
 
-            in_range(&thing.location()).then(|| Mark {
+            Some(Mark {
                 subject: Subject::Thing(id),
                 kind: thing.kind(),
                 location: thing.location(),

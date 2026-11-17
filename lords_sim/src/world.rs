@@ -104,9 +104,11 @@ impl World {
             }
             Subject::Area(id) => (self.area(id)?.nearest_shore(from), Length::ZERO),
         };
-        let margin = Length::from_millimeters(reach.as_millimeters() / 2);
+        if from.distance_to(nearest) <= clearance + reach {
+            return Some(from);
+        }
 
-        Some(nearest.toward(from, clearance + margin))
+        Some(nearest.toward(from, clearance + reach / 2))
     }
 }
 
@@ -174,6 +176,29 @@ mod tests {
 
         assert_eq!(spot, Location::new(0, 4_450));
         assert_eq!(world.approach(tree, spot, REACH), Some(spot));
+    }
+
+    #[test]
+    fn approach_stays_put_anywhere_within_reach() {
+        let mut world = World::default();
+        let tree = Subject::Thing(world.add_thing(birch(0, 5_000)));
+        let water = Subject::Area(world.add_area(lake()));
+        let at_arms_length = Location::new(0, 4_050);
+        let just_too_far = Location::new(0, 4_049);
+        let by_the_shore = Location::new(10_000, 29_200);
+
+        assert_eq!(
+            world.approach(tree, at_arms_length, REACH),
+            Some(at_arms_length)
+        );
+        assert_eq!(
+            world.approach(tree, just_too_far, REACH),
+            Some(Location::new(0, 4_450))
+        );
+        assert_eq!(
+            world.approach(water, by_the_shore, REACH),
+            Some(by_the_shore)
+        );
     }
 
     #[test]

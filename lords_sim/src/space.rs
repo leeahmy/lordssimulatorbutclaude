@@ -1,6 +1,6 @@
 //! Places and distances on the plane the simulation is laid out on.
 
-use std::ops::{Add, Sub};
+use std::ops::{Add, Div, Mul, Sub};
 
 use serde::{Deserialize, Serialize};
 
@@ -43,13 +43,29 @@ impl Sub for Length {
     }
 }
 
+impl Mul<i64> for Length {
+    type Output = Self;
+
+    fn mul(self, times: i64) -> Self {
+        Self(self.0 * times)
+    }
+}
+
+impl Div<i64> for Length {
+    type Output = Self;
+
+    fn div(self, parts: i64) -> Self {
+        Self(self.0 / parts)
+    }
+}
+
 /// Represents a location on a 2-dimensional plane, with millimeter accuracy.
 ///
 /// A location is represented by the x and y coordinates relative to the center of the plane,
 /// x growing eastward and y northward.
 /// The coordinates are stored as integers, and floating point errors are not a consideration.
-/// This location implementation should only be used for simplistic representations of 2-dimensional flat worlds
-/// and never in more complex, planetary contexts.
+/// This location implementation should only be used for simplistic representations of
+/// 2-dimensional flat worlds and never in more complex, planetary contexts.
 #[derive(Default, Copy, Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Location {
     x: i64,
@@ -114,7 +130,7 @@ impl Location {
         }
     }
 
-    fn offset_to(self, other: Self) -> (i128, i128) {
+    pub(crate) fn offset_to(self, other: Self) -> (i128, i128) {
         (
             i128::from(other.x) - i128::from(self.x),
             i128::from(other.y) - i128::from(self.y),

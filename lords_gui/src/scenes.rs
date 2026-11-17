@@ -24,23 +24,17 @@ pub const TOGGLE_FULLSCREEN: egui::KeyboardShortcut =
     egui::KeyboardShortcut::new(egui::Modifiers::NONE, egui::Key::F11);
 
 pub trait Scene {
-    /// Draw the scene UI and return any requested action.
     fn update(&mut self, ui: &mut egui::Ui, shared: &mut Shared<'_>) -> SceneResponse;
 
-    /// Called once when the scene is left for another, or the game is closed.
     fn on_exit(&mut self, _shared: &mut Shared<'_>) {}
 }
 
-/// What the app lends to whichever scene is showing.
 pub struct Shared<'a> {
     pub settings: &'a mut Settings,
     pub saves: &'a mut Saves,
-    /// Whether a dialog of the app's is covering the scene, which should then leave the
-    /// keyboard to it.
     pub dialog_open: bool,
 }
 
-/// Response from a scene update, indicating what action to take.
 pub enum SceneResponse {
     None,
     Transition(Box<dyn Scene>),
@@ -49,7 +43,6 @@ pub enum SceneResponse {
     App(AppAction),
 }
 
-/// Something every scene can ask for and none of them does itself.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AppAction {
     OpenOptions,
@@ -57,7 +50,6 @@ pub enum AppAction {
     Quit,
 }
 
-/// What the player picked from the menu bar.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MenuAction {
     App(AppAction),
@@ -66,8 +58,6 @@ pub enum MenuAction {
     MainMenu,
 }
 
-/// Renders the standard top panel with menu bar, with the entries that only make sense
-/// while a game is running if `in_game`.
 pub fn top_panel(ui: &mut egui::Ui, in_game: bool) -> Option<MenuAction> {
     let mut action = None;
 
@@ -117,4 +107,12 @@ fn menu_item(ui: &mut egui::Ui, label: &str, shortcut: Option<&egui::KeyboardSho
         button = button.shortcut_text(ui.ctx().format_shortcut(shortcut));
     }
     ui.add(button).clicked()
+}
+
+fn count(number: u64, unit: &str) -> String {
+    if number == 1 {
+        format!("1 {unit}")
+    } else {
+        format!("{number} {unit}s")
+    }
 }

@@ -1,5 +1,3 @@
-//! Simulation time: the absolute tick counter and the calendars that interpret it.
-
 pub mod gregorian;
 
 use serde::{Deserialize, Serialize};
@@ -8,9 +6,6 @@ use serde::{Deserialize, Serialize};
 pub const TICKS_PER_SECOND: u64 = 1;
 
 /// A point in simulation time, counted in ticks since [`Timestamp::EPOCH`].
-///
-/// A timestamp is absolute and not tied to any planet or calendar. See [`gregorian`] for
-/// interpreting it as a date and a time of day.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Serialize, Deserialize,
 )]

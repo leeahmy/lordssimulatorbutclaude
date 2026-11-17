@@ -203,7 +203,6 @@ impl CharacterCreation {
     fn name_preview(&self, ui: &mut egui::Ui) {
         ui.vertical_centered(|ui| {
             let full = self.build_name().full();
-            let full = full.trim();
             if full.is_empty() {
                 ui.label(RichText::new("…").weak().size(20.0));
             } else {

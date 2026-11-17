@@ -149,11 +149,8 @@ fn turn(a: Location, b: Location, c: Location) -> i128 {
 
 fn nearest_on_edge(start: Location, end: Location, from: Location) -> Location {
     let (start_x, start_y) = coordinates(start);
-    let (edge_x, edge_y) = (i128::from(end.x()) - start_x, i128::from(end.y()) - start_y);
-    let (from_x, from_y) = (
-        i128::from(from.x()) - start_x,
-        i128::from(from.y()) - start_y,
-    );
+    let (edge_x, edge_y) = start.offset_to(end);
+    let (from_x, from_y) = start.offset_to(from);
 
     let along = from_x * edge_x + from_y * edge_y;
     let length_squared = edge_x * edge_x + edge_y * edge_y;

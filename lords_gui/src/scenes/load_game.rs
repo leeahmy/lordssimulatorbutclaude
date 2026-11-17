@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use egui::RichText;
@@ -6,7 +6,7 @@ use lords_save::{SaveEntry, SaveKind, SimulationId, UnreadableSave};
 
 use crate::datetime::DateTimeFormat;
 
-use super::{MainMenu, MenuAction, Scene, SceneResponse, Shared, top_panel};
+use super::{MainMenu, MenuAction, Scene, SceneResponse, Shared, count, top_panel};
 
 const LIST_MAX_WIDTH: f32 = 640.0;
 const ROW_SPACING: egui::Vec2 = egui::vec2(16.0, 6.0);
@@ -288,7 +288,7 @@ fn group(saves: Vec<SaveEntry>) -> Vec<Playthrough> {
     playthroughs
 }
 
-fn file_name(path: &std::path::Path) -> String {
+fn file_name(path: &Path) -> String {
     path.file_name()
         .unwrap_or(path.as_os_str())
         .to_string_lossy()
@@ -300,20 +300,14 @@ fn file_name(path: &std::path::Path) -> String {
 fn time_ago(now_ms: u64, then_ms: u64) -> String {
     let elapsed = now_ms.saturating_sub(then_ms);
 
-    let (number, unit) = if elapsed < MS_PER_MINUTE {
-        return "just now".to_owned();
+    if elapsed < MS_PER_MINUTE {
+        "just now".to_owned()
     } else if elapsed < MS_PER_HOUR {
-        (elapsed / MS_PER_MINUTE, "minute")
+        format!("{} ago", count(elapsed / MS_PER_MINUTE, "minute"))
     } else if elapsed < MS_PER_DAY {
-        (elapsed / MS_PER_HOUR, "hour")
+        format!("{} ago", count(elapsed / MS_PER_HOUR, "hour"))
     } else {
-        (elapsed / MS_PER_DAY, "day")
-    };
-
-    if number == 1 {
-        format!("1 {unit} ago")
-    } else {
-        format!("{number} {unit}s ago")
+        format!("{} ago", count(elapsed / MS_PER_DAY, "day"))
     }
 }
 

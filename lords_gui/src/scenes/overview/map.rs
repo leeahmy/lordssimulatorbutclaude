@@ -1,17 +1,20 @@
 use std::ops::RangeInclusive;
 
 use egui::{Align2, Color32, FontId, Pos2, Rect, Sense, Shape, Stroke};
-use lords_sim::map::{Map, Mark, Water};
+use lords_sim::map::{Map, Mark, RANGE, Water};
 use lords_sim::object::Living;
+use lords_sim::time::gregorian::{SECONDS_PER_DAY, SECONDS_PER_HOUR, SECONDS_PER_MINUTE};
 use lords_sim::world::{Kind, PlantSpecies};
 use lords_sim::{Command, Length, Location, Subject, Timestamp, View};
 
+use crate::scenes::count;
+
+use super::Pointed;
 use super::surroundings::{distance, name};
-use super::{Pointed, count};
 
 /// How many meters there are from the player to the edges of the map at first.
 pub const DEFAULT_REACH: f32 = 50.0;
-const REACH_LIMITS: RangeInclusive<f32> = 10.0..=300.0;
+const REACH_LIMITS: RangeInclusive<f32> = 10.0..=RANGE.as_millimeters() as f32 / 1_000.0;
 const ZOOM_PER_SCROLLED_POINT: f32 = 0.004;
 
 const PANEL_WIDTH: f32 = 320.0;
@@ -27,7 +30,7 @@ const SMALLEST_DOT: f32 = 2.0;
 const FRESHEST: f32 = 0.6;
 const FAINTEST: f32 = 0.15;
 
-const FADING_HALF_LIFE: f32 = 3_600.0;
+const FADING_HALF_LIFE: f32 = SECONDS_PER_HOUR as f32;
 
 /// How far outside a dot or a shore the pointer still points at it.
 const POINTING_SLACK: f32 = 4.0;
@@ -221,7 +224,9 @@ fn opacity(age: u64) -> f32 {
 
 /// Returns the words for how long ago `age` in-game seconds were.
 fn ago(age: u64) -> String {
-    let (minutes, hours, days) = (age / 60, age / 3_600, age / 86_400);
+    let minutes = age / SECONDS_PER_MINUTE;
+    let hours = age / SECONDS_PER_HOUR;
+    let days = age / SECONDS_PER_DAY;
 
     if minutes == 0 {
         "moments ago".to_owned()
