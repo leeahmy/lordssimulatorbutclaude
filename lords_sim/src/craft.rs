@@ -3,6 +3,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::item::Item;
+use crate::settlement::Advance;
 use crate::skill::Skill;
 use crate::world::StructureKind;
 
@@ -16,6 +17,8 @@ pub enum Recipe {
     BarkPot,
     Snare,
     FishTrap,
+    ClayPot,
+    IronAxe,
     FurHat,
     FurBoots,
     FurCoat,
@@ -27,6 +30,7 @@ pub enum Recipe {
     Cabin,
     SetSnare,
     SetFishTrap,
+    Cairn,
 
     Butcher,
     CookMeat,
@@ -64,7 +68,7 @@ impl Trade {
 }
 
 impl Recipe {
-    pub const ALL: [Self; 21] = [
+    pub const ALL: [Self; 24] = [
         Self::Cordage,
         Self::StoneAxe,
         Self::BoneNeedle,
@@ -72,6 +76,8 @@ impl Recipe {
         Self::BarkPot,
         Self::Snare,
         Self::FishTrap,
+        Self::ClayPot,
+        Self::IronAxe,
         Self::FurHat,
         Self::FurBoots,
         Self::FurCoat,
@@ -82,6 +88,7 @@ impl Recipe {
         Self::Cabin,
         Self::SetSnare,
         Self::SetFishTrap,
+        Self::Cairn,
         Self::Butcher,
         Self::CookMeat,
         Self::CookFish,
@@ -97,6 +104,8 @@ impl Recipe {
             Self::BarkPot => "Fold a birch-bark pot",
             Self::Snare => "Tie a snare",
             Self::FishTrap => "Weave a fish trap",
+            Self::ClayPot => "Fire a clay pot",
+            Self::IronAxe => "Forge an iron axe",
             Self::FurHat => "Sew a fur hat and mittens",
             Self::FurBoots => "Sew fur boots",
             Self::FurCoat => "Sew a fur coat",
@@ -107,6 +116,7 @@ impl Recipe {
             Self::Cabin => "Build a log cabin",
             Self::SetSnare => "Set a snare",
             Self::SetFishTrap => "Set a fish trap",
+            Self::Cairn => "Found a settlement",
             Self::Butcher => "Butcher a hare",
             Self::CookMeat => "Cook meat",
             Self::CookFish => "Cook perch",
@@ -124,6 +134,10 @@ impl Recipe {
             Self::BarkPot => "You fold and stitch the bark into a pot that holds water.",
             Self::Snare => "You tie the cordage into a snare.",
             Self::FishTrap => "You weave the sticks into a fish trap.",
+            Self::ClayPot => "You shape the clay and fire it into a pot that holds three liters.",
+            Self::IronAxe => {
+                "You smelt the ore, and hammer the bloom into an axe that will not break."
+            }
             Self::FurHat => "You sew a fur hat and a pair of mittens.",
             Self::FurBoots => "You sew a pair of fur boots.",
             Self::FurCoat => "You sew a fur coat.",
@@ -134,6 +148,7 @@ impl Recipe {
             Self::Cabin => "You lay the last of the roof. The cabin is finished.",
             Self::SetSnare => "You set the snare on a hare trail.",
             Self::SetFishTrap => "You sink the fish trap by the shore.",
+            Self::Cairn => "You raise a cairn of stones. This is where you will stay.",
             Self::Butcher => "You skin and butcher the hare.",
             Self::CookMeat => "You roast a piece of meat over the fire.",
             Self::CookFish => "You roast a perch over the fire.",
@@ -149,7 +164,9 @@ impl Recipe {
             | Self::FishingRod
             | Self::BarkPot
             | Self::Snare
-            | Self::FishTrap => Trade::Tools,
+            | Self::FishTrap
+            | Self::ClayPot
+            | Self::IronAxe => Trade::Tools,
             Self::FurHat | Self::FurBoots | Self::FurCoat => Trade::Clothing,
             Self::Campfire
             | Self::Bed
@@ -157,7 +174,8 @@ impl Recipe {
             | Self::DryingRack
             | Self::Cabin
             | Self::SetSnare
-            | Self::SetFishTrap => Trade::Camp,
+            | Self::SetFishTrap
+            | Self::Cairn => Trade::Camp,
             Self::Butcher | Self::CookMeat | Self::CookFish | Self::BoilWater => Trade::Food,
         }
     }
@@ -172,6 +190,8 @@ impl Recipe {
             Self::BarkPot => &[(Item::BirchBark, 2), (Item::Cordage, 1)],
             Self::Snare => &[(Item::Cordage, 1)],
             Self::FishTrap => &[(Item::Stick, 12), (Item::Cordage, 2)],
+            Self::ClayPot => &[(Item::Clay, 2), (Item::Stick, 4)],
+            Self::IronAxe => &[(Item::BogOre, 4), (Item::Log, 2), (Item::Stick, 1)],
             Self::FurHat | Self::FurBoots => &[(Item::HarePelt, 2), (Item::Cordage, 1)],
             Self::FurCoat => &[(Item::HarePelt, 5), (Item::Cordage, 2)],
             Self::Campfire => &[(Item::Stick, 5), (Item::BirchBark, 1)],
@@ -189,6 +209,7 @@ impl Recipe {
             ],
             Self::SetSnare => &[(Item::Snare, 1), (Item::Stick, 1)],
             Self::SetFishTrap => &[(Item::FishTrap, 1)],
+            Self::Cairn => &[(Item::Stone, 10)],
             Self::Butcher => &[(Item::HareCarcass, 1)],
             Self::CookMeat => &[(Item::RawMeat, 1)],
             Self::CookFish => &[(Item::RawFish, 1)],
@@ -199,6 +220,7 @@ impl Recipe {
     /// Returns what has to be at hand but is not used up.
     pub const fn tools(self) -> &'static [Item] {
         match self {
+            Self::ClayPot | Self::IronAxe => &[],
             Self::StoneAxe
             | Self::BoneNeedle
             | Self::FishingRod
@@ -216,8 +238,19 @@ impl Recipe {
             | Self::LeanTo
             | Self::SetSnare
             | Self::SetFishTrap
+            | Self::Cairn
             | Self::CookMeat
             | Self::CookFish => &[],
+        }
+    }
+
+    /// Returns what the settlement has to know for it to be made, and the building it
+    /// has to be made at, if it takes any such thing.
+    pub const fn craft(self) -> Option<(Advance, StructureKind)> {
+        match self {
+            Self::ClayPot => Some((Advance::Pottery, StructureKind::Kiln)),
+            Self::IronAxe => Some((Advance::Ironworking, StructureKind::Smithy)),
+            _ => None,
         }
     }
 
@@ -240,6 +273,8 @@ impl Recipe {
             Self::BarkPot => Product::Items(&[(Item::BarkPot, 1)]),
             Self::Snare => Product::Items(&[(Item::Snare, 1)]),
             Self::FishTrap => Product::Items(&[(Item::FishTrap, 1)]),
+            Self::ClayPot => Product::Items(&[(Item::ClayPot, 1)]),
+            Self::IronAxe => Product::Items(&[(Item::IronAxe, 1)]),
             Self::FurHat => Product::Items(&[(Item::FurHat, 1)]),
             Self::FurBoots => Product::Items(&[(Item::FurBoots, 1)]),
             Self::FurCoat => Product::Items(&[(Item::FurCoat, 1)]),
@@ -250,6 +285,7 @@ impl Recipe {
             Self::Cabin => Product::Structure(StructureKind::Cabin),
             Self::SetSnare => Product::Structure(StructureKind::Snare),
             Self::SetFishTrap => Product::Structure(StructureKind::FishTrap),
+            Self::Cairn => Product::Structure(StructureKind::Cairn),
             Self::Butcher => {
                 Product::Items(&[(Item::RawMeat, 3), (Item::HarePelt, 1), (Item::Bone, 2)])
             }
@@ -271,11 +307,13 @@ impl Recipe {
             Self::FishingRod | Self::BarkPot | Self::Bed | Self::Butcher => 15 * MINUTE,
             Self::Snare => 2 * MINUTE,
             Self::FishTrap => 45 * MINUTE,
+            Self::ClayPot => 40 * MINUTE,
+            Self::IronAxe => 3 * HOUR,
             Self::FurHat => 90 * MINUTE,
             Self::FurBoots => 2 * HOUR,
             Self::FurCoat => 4 * HOUR,
             Self::Campfire | Self::SetSnare => 3 * MINUTE,
-            Self::LeanTo => 90 * MINUTE,
+            Self::LeanTo | Self::Cairn => 90 * MINUTE,
             Self::DryingRack => 30 * MINUTE,
             Self::Cabin => 14 * HOUR,
             Self::SetFishTrap | Self::BoilWater => 5 * MINUTE,
@@ -287,6 +325,7 @@ impl Recipe {
     /// Returns the skill it takes, and adds to.
     pub const fn skill(self) -> Skill {
         match self {
+            Self::ClayPot | Self::IronAxe => Skill::Crafting,
             Self::Cordage
             | Self::StoneAxe
             | Self::BoneNeedle
@@ -298,7 +337,9 @@ impl Recipe {
             Self::Snare | Self::SetSnare | Self::Butcher => Skill::Trapping,
             Self::FishTrap | Self::SetFishTrap => Skill::Fishing,
             Self::Campfire => Skill::Firemaking,
-            Self::Bed | Self::LeanTo | Self::DryingRack | Self::Cabin => Skill::Building,
+            Self::Bed | Self::LeanTo | Self::DryingRack | Self::Cabin | Self::Cairn => {
+                Skill::Building
+            }
             Self::CookMeat | Self::CookFish | Self::BoilWater => Skill::Cooking,
         }
     }
@@ -347,6 +388,8 @@ mod tests {
             Item::BirchBark,
             Item::SpruceRoot,
             Item::Stone,
+            Item::Clay,
+            Item::BogOre,
             Item::Knife,
             Item::FireSteel,
             Item::HareCarcass,

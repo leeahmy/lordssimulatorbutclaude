@@ -16,6 +16,8 @@ impl Memory {
         match subject {
             Subject::Thing(id) => self.knows_thing(id),
             Subject::Area(id) => self.shore(id).is_some_and(|shore| !shore.is_empty()),
+            // People are not committed to memory. Those in the forest are known of.
+            Subject::Person(_) => false,
         }
     }
 

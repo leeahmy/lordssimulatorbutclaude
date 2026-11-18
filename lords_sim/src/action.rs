@@ -4,6 +4,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::craft::Recipe;
 use crate::item::{Inventory, Item};
+use crate::people::Bond;
+use crate::politics::Appeal;
+use crate::settlement::Advance;
 use crate::skill::Skill;
 use crate::time::Timestamp;
 use crate::world::{Kind, PlantSpecies, StructureKind, Subject, ThingId};
@@ -29,6 +32,23 @@ pub enum Verb {
     TakeDown,
     /// Putting all the wood on a fire that it takes, logs first.
     Stoke,
+    Talk,
+    /// Giving the best food carried.
+    Gift,
+    /// Asking someone to come and live with the player character.
+    Invite,
+    /// Asking someone to share the player character's life.
+    Court,
+    TryForChild,
+    /// Putting everything carried but tools, clothes, and water in the common store.
+    Deposit,
+    /// Working on a building site.
+    Build,
+    DigClay,
+    /// Raking bog ore off the bottom of the shallows.
+    RakeOre,
+    /// Paying someone in food to think for a while.
+    Hire,
 }
 
 impl Verb {
@@ -46,7 +66,13 @@ impl Verb {
             }
             Kind::Plant(PlantSpecies::Bilberry | PlantSpecies::Lingonberry) => &[Self::PickBerries],
             Kind::Rock => &[],
-            Kind::Lake => &[Self::Drink, Self::FillWater, Self::Fish],
+            Kind::Lake => &[
+                Self::Drink,
+                Self::FillWater,
+                Self::Fish,
+                Self::DigClay,
+                Self::RakeOre,
+            ],
             Kind::Pile(_) => &[Self::PickUp],
             Kind::Structure(StructureKind::Campfire) => {
                 &[Self::AddStick, Self::AddLog, Self::Stoke]
@@ -56,9 +82,14 @@ impl Verb {
             Kind::Structure(StructureKind::SprungSnare) => &[Self::Collect],
             Kind::Structure(StructureKind::FishTrap) => &[Self::Collect, Self::TakeDown],
             Kind::Structure(StructureKind::DryingRack) => &[Self::HangFood, Self::Collect],
-            Kind::Structure(StructureKind::LeanTo | StructureKind::Bed | StructureKind::Cabin) => {
-                &[]
-            }
+            Kind::Structure(StructureKind::Cairn | StructureKind::Storehouse) => &[Self::Deposit],
+            Kind::Structure(StructureKind::Site) => &[Self::Build],
+            Kind::Structure(StructureKind::Well) => &[Self::Drink, Self::FillWater],
+            Kind::Structure(_) => &[],
+            Kind::Person(Bond::Stranger | Bond::Child) => &[Self::Talk, Self::Gift],
+            Kind::Person(Bond::Friend) => &[Self::Talk, Self::Gift, Self::Invite, Self::Court],
+            Kind::Person(Bond::Companion) => &[Self::Talk, Self::Gift, Self::Court, Self::Hire],
+            Kind::Person(Bond::Partner) => &[Self::Talk, Self::Gift, Self::TryForChild],
         }
     }
 
@@ -86,6 +117,16 @@ impl Verb {
             Self::HangFood => "Hang food to dry",
             Self::TakeDown => "Take down",
             Self::Stoke => "Bank up with all the wood",
+            Self::Talk => "Talk",
+            Self::Gift => "Give food",
+            Self::Invite => "Ask to stay with you",
+            Self::Court => "Ask to share your life",
+            Self::TryForChild => "Try for a child",
+            Self::Deposit => "Put your load in the store",
+            Self::Build => "Work on it",
+            Self::DigClay => "Dig clay",
+            Self::RakeOre => "Rake bog ore",
+            Self::Hire => "Hire to think for you",
         }
     }
 
@@ -107,6 +148,14 @@ impl Verb {
             Self::Collect => "Emptying it",
             Self::HangFood => "Hanging food to dry",
             Self::TakeDown => "Taking it down",
+            Self::Talk | Self::Invite | Self::Court => "Talking",
+            Self::Gift => "Giving food",
+            Self::TryForChild => "Together",
+            Self::Deposit => "Storing your load",
+            Self::Build => "Building",
+            Self::DigClay => "Digging clay",
+            Self::RakeOre => "Raking bog ore",
+            Self::Hire => "Striking a bargain",
         }
     }
 
@@ -134,13 +183,22 @@ impl Verb {
             Self::Fish => Some(Skill::Fishing),
             Self::Light => Some(Skill::Firemaking),
             Self::Collect | Self::TakeDown => Some(Skill::Trapping),
+            Self::Build => Some(Skill::Building),
+            Self::DigClay | Self::RakeOre => Some(Skill::Foraging),
             Self::HangFood => Some(Skill::Cooking),
             Self::PickUp
             | Self::Drink
             | Self::FillWater
             | Self::AddStick
             | Self::AddLog
-            | Self::Stoke => None,
+            | Self::Stoke
+            | Self::Talk
+            | Self::Gift
+            | Self::Invite
+            | Self::Court
+            | Self::TryForChild
+            | Self::Deposit
+            | Self::Hire => None,
         }
     }
 
@@ -149,7 +207,7 @@ impl Verb {
     pub const fn repeats(self) -> bool {
         matches!(
             self,
-            Self::GatherSticks | Self::GatherBoughs | Self::PickBerries | Self::Fish
+            Self::GatherSticks | Self::GatherBoughs | Self::PickBerries | Self::Fish | Self::Build
         )
     }
 }
@@ -165,6 +223,8 @@ pub enum Job {
     /// Eating or drinking one of the item.
     Consume(Item),
     EatSnow,
+    /// Winning over the people of the settlement.
+    Appeal(Appeal),
 }
 
 /// What is within reach of a person apart from what they carry.
@@ -174,6 +234,9 @@ pub struct AtHand {
     pub loose: Inventory,
     /// The piles within reach, nearest first.
     pub(crate) piles: Vec<ThingId>,
+    /// The cairn of the settlement, if its common store is within reach, in which case
+    /// what is in the store counts as lying within reach.
+    pub store: Option<ThingId>,
     /// Whether a fire burns within reach.
     pub fire: bool,
     /// When the fire within reach that burns the longest burns out.
@@ -182,6 +245,10 @@ pub struct AtHand {
     pub shelter: Option<StructureKind>,
     pub bed: bool,
     pub water: bool,
+    /// What the settlement knows.
+    pub advances: Vec<Advance>,
+    /// The buildings within reach at which things are made.
+    pub workplaces: Vec<StructureKind>,
 }
 
 impl AtHand {
@@ -191,12 +258,26 @@ impl AtHand {
         carried.count(item) + self.loose.count(item)
     }
 
+    /// Returns whether there is `tool` to use, or something that does for it.
+    pub fn has_tool(&self, carried: &Inventory, tool: Item) -> bool {
+        let stand_in = tool.stand_in().map_or(0, |item| self.count(carried, item));
+        self.count(carried, tool) + stand_in > 0
+    }
+
     /// Returns everything that `recipe` takes and that someone carrying `carried` lacks.
     pub fn lacks(&self, carried: &Inventory, recipe: Recipe) -> Vec<Lack> {
         let mut lacks = Vec::new();
 
+        if let Some((advance, workplace)) = recipe.craft() {
+            if !self.advances.contains(&advance) {
+                lacks.push(Lack::Knowledge(advance));
+            }
+            if !self.workplaces.contains(&workplace) {
+                lacks.push(Lack::Workplace(workplace));
+            }
+        }
         for tool in recipe.tools() {
-            if self.count(carried, *tool) == 0 {
+            if !self.has_tool(carried, *tool) {
                 lacks.push(Lack::Tool(*tool));
             }
         }
@@ -225,6 +306,10 @@ pub enum Lack {
     Material(Item, u32),
     Fire,
     Water,
+    /// Something the settlement has to have worked out.
+    Knowledge(Advance),
+    /// A building that has to be within reach.
+    Workplace(StructureKind),
 }
 
 impl Lack {
@@ -234,6 +319,15 @@ impl Lack {
             Self::Material(item, count) => format!("{count} × {}", item.name().to_lowercase()),
             Self::Fire => "a burning fire within reach".to_owned(),
             Self::Water => "the lake within reach".to_owned(),
+            Self::Knowledge(advance) => {
+                format!("your people to know {}", advance.name().to_lowercase())
+            }
+            Self::Workplace(kind) => {
+                format!(
+                    "a {} within reach",
+                    Kind::Structure(kind).name().to_lowercase()
+                )
+            }
         }
     }
 }

@@ -2,6 +2,7 @@ use egui::RichText;
 use lords_sim::action::Lack;
 use lords_sim::craft::Trade;
 use lords_sim::skill::Skill;
+use lords_sim::world::Kind;
 use lords_sim::{Command, Item, Recipe, View};
 
 const ROW_SPACING: f32 = 2.0;
@@ -33,7 +34,7 @@ fn row(ui: &mut egui::Ui, view: &View, recipe: Recipe) -> bool {
     let lacked = |item: Item| {
         lacks.iter().any(|lack| match lack {
             Lack::Tool(lacked) | Lack::Material(lacked, _) => *lacked == item,
-            Lack::Fire | Lack::Water => false,
+            Lack::Fire | Lack::Water | Lack::Knowledge(_) | Lack::Workplace(_) => false,
         })
     };
 
@@ -51,6 +52,16 @@ fn row(ui: &mut egui::Ui, view: &View, recipe: Recipe) -> bool {
     }
     if recipe.needs_water() {
         needs.push(("the lake".to_owned(), lacks.contains(&Lack::Water)));
+    }
+    if let Some((advance, workplace)) = recipe.craft() {
+        needs.push((
+            format!("your people knowing {}", advance.name().to_lowercase()),
+            lacks.contains(&Lack::Knowledge(advance)),
+        ));
+        needs.push((
+            format!("a {}", Kind::Structure(workplace).name().to_lowercase()),
+            lacks.contains(&Lack::Workplace(workplace)),
+        ));
     }
 
     let mut made = false;

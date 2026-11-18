@@ -25,6 +25,8 @@ pub struct Surroundings {
     pub nearby: Vec<Sighting>,
     /// Everything farther away, with one sighting for all of a kind.
     pub in_sight: Vec<Sighting>,
+    /// The people out of reach, each one by themselves.
+    pub people: Vec<Sighting>,
 }
 
 impl Surroundings {
@@ -37,6 +39,7 @@ impl Surroundings {
             .iter()
             .chain(&self.nearby)
             .chain(&self.in_sight)
+            .chain(&self.people)
     }
 
     pub fn sighting(&self, subject: Subject) -> Option<&Sighting> {
@@ -138,6 +141,50 @@ pub(crate) fn look(world: &World, grid: &Grid, eye: Location, limit: Length) -> 
         surroundings: arrange(sightings),
         things,
         shores,
+    }
+}
+
+/// Adds to `surroundings` the people that a perceiver whose eyes are above `eye` sees, when
+/// there is light to see as far as `limit` by.
+pub(crate) fn look_at_people(
+    world: &World,
+    grid: &Grid,
+    eye: Location,
+    limit: Length,
+    surroundings: &mut Surroundings,
+) {
+    let limit = limit.min(SIGHT_LIMIT);
+    let mut met = false;
+
+    for (id, person) in world.people() {
+        let subject = Subject::Person(id);
+        let apart = eye.distance_to(person.location);
+        let Some(kind) = world.kind(subject) else {
+            continue;
+        };
+        if apart > limit || !is_clear(world, grid, eye, person.location, None) {
+            continue;
+        }
+
+        let sighting = Sighting {
+            subject,
+            kind,
+            count: 1,
+            distance: (apart - crate::people::Person::GIRTH).max(Length::ZERO),
+            bearing: eye.bearing_to(person.location),
+        };
+        if sighting.distance <= Human::REACH {
+            surroundings.within_reach.push(sighting);
+            met = true;
+        } else {
+            surroundings.people.push(sighting);
+        }
+    }
+
+    let order = |sighting: &Sighting| (sighting.distance, sighting.subject);
+    surroundings.people.sort_by_key(order);
+    if met {
+        surroundings.within_reach.sort_by_key(order);
     }
 }
 

@@ -52,15 +52,40 @@ pub fn show(ui: &mut egui::Ui, view: &View) -> Option<Command> {
 
     let loose = &view.at_hand.loose;
     if !loose.is_empty() {
-        ui.label(RichText::new("On the ground within reach").strong());
+        let title = if view.at_hand.store.is_some() {
+            "In the store and on the ground within reach"
+        } else {
+            "On the ground within reach"
+        };
+        ui.label(RichText::new(title).strong());
         egui::Grid::new("loose")
-            .num_columns(3)
+            .num_columns(4)
             .min_col_width(COLUMN_WIDTH)
             .min_row_height(ui.spacing().interact_size.y)
             .spacing(ROW_SPACING)
             .show(ui, |ui| {
                 for stack in loose.stacks() {
                     stack_cells(ui, stack);
+                    ui.horizontal(|ui| {
+                        let item = stack.item;
+                        if item.food().is_some() {
+                            let verb = if item.is_drink() { "Drink" } else { "Eat" };
+                            if ui.button(verb).clicked() {
+                                command = Some(Command::Consume(item));
+                            }
+                        }
+                        if ui.button("Take").on_hover_text("Take one").clicked() {
+                            command = Some(Command::Take(item, 1));
+                        }
+                        if stack.count > 1
+                            && ui
+                                .button("Take all")
+                                .on_hover_text("Take as many as you can carry")
+                                .clicked()
+                        {
+                            command = Some(Command::Take(item, stack.count));
+                        }
+                    });
                     ui.end_row();
                 }
             });

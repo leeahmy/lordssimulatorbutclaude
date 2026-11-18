@@ -1,20 +1,25 @@
+mod art;
+
 use std::iter;
 use std::ops::RangeInclusive;
 
 use egui::{Align2, Color32, FontId, Pos2, Rect, Sense, Shape, Stroke};
+use lords_sim::climate::Light;
 use lords_sim::map::{Map, Mark, RANGE, Water};
 use lords_sim::object::Living;
+use lords_sim::people::Person;
 use lords_sim::time::gregorian::{SECONDS_PER_DAY, SECONDS_PER_HOUR, SECONDS_PER_MINUTE};
-use lords_sim::world::{Kind, PlantSpecies, StructureKind};
+use lords_sim::world::{Kind, StructureKind};
 use lords_sim::{Command, Length, Location, Subject, Timestamp, View};
 
 use crate::scenes::count;
 
+use self::art::{Art, Dress, Sprite, TILE_METERS};
 use super::Pointed;
 use super::surroundings::{distance, name};
 
 /// How many meters there are from the player to the edges of the map at first.
-pub const DEFAULT_REACH: f32 = 50.0;
+pub const DEFAULT_REACH: f32 = 30.0;
 const REACH_LIMITS: RangeInclusive<f32> = 10.0..=RANGE.as_millimeters() as f32 / 1_000.0;
 const ZOOM_PER_SCROLLED_POINT: f32 = 0.004;
 
@@ -36,9 +41,23 @@ const FADING_HALF_LIFE: f32 = SECONDS_PER_HOUR as f32;
 /// How far outside a dot or a shore the pointer still points at it.
 const POINTING_SLACK: f32 = 4.0;
 
-const PLAYER_RADIUS: f32 = 4.0;
+/// The least width that the pictures of things, of people, and of the player are drawn at.
+const SMALLEST_SPRITE: f32 = 8.0;
+const FIGURE_WIDTH: f32 = 8.0;
+const PLAYER_WIDTH: f32 = 10.0;
+
+/// How many meters around it a fire is drawn to light up at night.
+const FIRE_GLOW: f32 = 6.0;
+
+/// What is written and drawn over the map, and what is put under it to set it off.
+const INK: Color32 = Color32::from_rgb(250, 248, 238);
+const SHADOW: Color32 = Color32::from_rgba_premultiplied(14, 12, 18, 170);
+const SHORE: Color32 = Color32::from_rgb(226, 208, 152);
+
+/// The whole of a picture.
+const WHOLE: Rect = Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0));
+
 const HIGHLIGHT_GAP: f32 = 3.0;
-const CORNER_RADIUS: f32 = 4.0;
 const MARGIN: f32 = 10.0;
 const LABEL_SIZE: f32 = 12.0;
 
@@ -72,72 +91,159 @@ fn chart(ui: &mut egui::Ui, view: &View, reach: &mut f32, highlighted: Option<Su
         zoom(ui, reach);
     }
 
-    let palette = Palette::of(ui.visuals());
+    let ctx = ui.ctx().clone();
+    let art = Art::of(&ctx);
+    let dress = Dress::of(&view.conditions);
+    let painter = painter.with_clip_rect(rect);
     let map = &*view.map;
     let projection = Projection {
         center: rect.center(),
         origin: view.player.location(),
         points_per_meter: side / 2.0 / *reach,
     };
-    let dots: Vec<Dot<'_>> = map
+
+    // People are pointed at and drawn like things that are always in sight.
+    let figures: Vec<Mark> = map
+        .people
+        .iter()
+        .map(|figure| Mark {
+            subject: figure.subject,
+            kind: Kind::Person(figure.bond),
+            location: figure.location,
+            footprint: Person::GIRTH,
+            last_seen: None,
+        })
+        .collect();
+    let mut dots: Vec<Dot<'_>> = map
         .things
         .iter()
+        .chain(&figures)
         .map(|mark| Dot::of(mark, projection))
-        .filter(|dot| rect.expand(dot.radius).contains(dot.center))
+        .filter(|dot| {
+            rect.expand(dot.radius + SMALLEST_SPRITE)
+                .contains(dot.center)
+        })
         .collect();
+    // What stands farther south is drawn over what stands behind it.
+    dots.sort_by(|a, b| a.center.y.total_cmp(&b.center.y));
 
     let pointed_at = response
         .hover_pos()
         .and_then(|pointer| pointed_at(pointer, &dots, &map.waters, projection));
     let lit = |subject| pointed_at == Some(subject) || highlighted == Some(subject);
 
-    painter.rect_filled(rect, CORNER_RADIUS, palette.ground);
+    let ground = art.texture(&ctx, Sprite::Ground, dress, false);
+    painter.image(
+        ground.id(),
+        rect,
+        Rect::from_min_max(projection.tile_at(rect.min), projection.tile_at(rect.max)),
+        Color32::WHITE,
+    );
+
+    let waves = art.texture(&ctx, Sprite::Water, dress, false);
     for water in &map.waters {
-        let width = if lit(water.subject) { 3.0 } else { 1.5 };
-        painter.add(surface(water, projection, palette.water));
+        let width = if lit(water.subject) { 4.0 } else { 2.0 };
+        painter.add(surface(water, projection, waves.id()));
         for ends in &water.shore {
             let ends = ends.map(|end| projection.position(end));
-            painter.line_segment(ends, Stroke::new(width, palette.shore));
+            painter.line_segment(ends, Stroke::new(width, SHORE));
         }
     }
+
+    // A fire flickers: its picture is turned around every other second.
+    let flicker = view.time.as_seconds() % 2 == 1;
+    let mut rings = Vec::new();
+    let mut fires = Vec::new();
     for dot in &dots {
-        let color = palette.of_kind(dot.mark.kind);
-        let (fill, edge) = match dot.mark.last_seen {
-            None => (color, palette.ground),
+        let kind = dot.mark.kind;
+        let burning = kind == Kind::Structure(StructureKind::Campfire);
+        let texture = art.texture(&ctx, Sprite::Thing(kind), dress, burning && flicker);
+        let size = sprite_size(dot, &texture);
+        let tint = match dot.mark.last_seen {
+            None => Color32::WHITE,
             Some(last_seen) => {
                 let age = view.time.seconds_since(last_seen);
-                (color.gamma_multiply(opacity(age)), Color32::TRANSPARENT)
+                Color32::WHITE.gamma_multiply(opacity(age))
             }
         };
 
-        painter.circle_filled(dot.center, dot.radius, fill);
-        if !matches!(dot.mark.kind, Kind::Plant(_)) {
-            painter.circle_stroke(dot.center, dot.radius, Stroke::new(1.0, edge));
-        }
+        painter.image(
+            texture.id(),
+            Rect::from_center_size(dot.center, size),
+            WHOLE,
+            tint,
+        );
         if lit(dot.mark.subject) {
-            let ring = Stroke::new(1.5, palette.strong);
-            painter.circle_stroke(dot.center, dot.radius + HIGHLIGHT_GAP, ring);
+            rings.push((dot.center, size.x.max(size.y) / 2.0 + HIGHLIGHT_GAP));
+        }
+        if burning && dot.mark.in_sight() {
+            fires.push(dot.center);
         }
     }
+
     if let Some(walk) = &view.walk {
         let turns = walk.via.iter().chain([&walk.destination]);
-        let route = iter::once(rect.center())
+        let route: Vec<Pos2> = iter::once(rect.center())
             .chain(turns.map(|turn| projection.position(*turn)))
             .collect();
-        painter.add(Shape::line(route, Stroke::new(1.0, palette.strong)));
+        painter.add(Shape::line(route.clone(), Stroke::new(3.0, SHADOW)));
+        painter.add(Shape::line(route, Stroke::new(1.5, INK)));
     }
-    painter.circle_filled(rect.center(), PLAYER_RADIUS, palette.strong);
-    painter.circle_stroke(
-        rect.center(),
-        PLAYER_RADIUS,
-        Stroke::new(1.5, palette.ground),
+
+    let player = art.texture(&ctx, Sprite::Player, dress, false);
+    let width = (projection.points_per_meter * 1.5).max(PLAYER_WIDTH);
+    let [texels_wide, texels_high] = player.size();
+    let height = width * texels_high as f32 / texels_wide as f32;
+    painter.image(
+        player.id(),
+        Rect::from_center_size(rect.center(), egui::vec2(width, height)),
+        WHOLE,
+        Color32::WHITE,
     );
-    legend(&painter, rect, projection, &palette);
+
+    let darkness = match view.conditions.light {
+        Light::Day => 0,
+        Light::Twilight => 70,
+        Light::Dusk => 120,
+        Light::Dark => 165,
+    };
+    if darkness > 0 {
+        let night = Color32::from_rgba_unmultiplied(10, 14, 44, darkness);
+        painter.rect_filled(rect, 0.0, night);
+        for fire in fires {
+            let glow = projection.points_per_meter * FIRE_GLOW;
+            painter.circle_filled(
+                fire,
+                glow,
+                Color32::from_rgba_unmultiplied(255, 176, 72, 36),
+            );
+            painter.circle_filled(
+                fire,
+                glow / 2.0,
+                Color32::from_rgba_unmultiplied(255, 200, 96, 48),
+            );
+        }
+    }
+
+    for (center, radius) in rings {
+        painter.circle_stroke(center, radius, Stroke::new(3.0, SHADOW));
+        painter.circle_stroke(center, radius, Stroke::new(1.5, INK));
+    }
+    legend(&painter, rect, projection);
 
     let clicked = response.clicked();
     if let Some(subject) = pointed_at {
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-        if let Some(description) = describe(subject, map, projection, view.time) {
+        let description = match view.person(subject) {
+            Some(person) if person.met => Some(format!(
+                "{}, {}",
+                person.name,
+                person.bond.name().to_lowercase()
+            )),
+            Some(_) => Some("Someone you have not met".to_owned()),
+            None => describe(subject, map, projection, view.time),
+        };
+        if let Some(description) = description {
             response.on_hover_text_at_pointer(description);
         }
     }
@@ -148,6 +254,22 @@ fn chart(ui: &mut egui::Ui, view: &View, reach: &mut f32, highlighted: Option<Su
     }
 }
 
+/// Returns how large the picture of what `dot` is of is drawn: as wide as the thing is,
+/// but never too small to make out, and as high as the picture is to its width.
+fn sprite_size(dot: &Dot<'_>, texture: &egui::TextureHandle) -> egui::Vec2 {
+    let smallest = match dot.mark.kind {
+        Kind::Person(_) => FIGURE_WIDTH,
+        _ => SMALLEST_SPRITE,
+    };
+    let width = (dot.radius * 2.0).max(smallest);
+    let [texels_wide, texels_high] = texture.size();
+
+    egui::vec2(
+        width,
+        width * texels_high as f32 / texels_wide.max(1) as f32,
+    )
+}
+
 fn zoom(ui: &egui::Ui, reach: &mut f32) {
     let (scrolled, pinched) = ui.input(|input| (input.smooth_scroll_delta.y, input.zoom_delta()));
     let closer = pinched * (scrolled * ZOOM_PER_SCROLLED_POINT).exp();
@@ -156,10 +278,21 @@ fn zoom(ui: &egui::Ui, reach: &mut f32) {
 }
 
 /// Draws which way north is and how long a round distance is on the map.
-fn legend(painter: &egui::Painter, rect: Rect, projection: Projection, palette: &Palette) {
+fn legend(painter: &egui::Painter, rect: Rect, projection: Projection) {
     let font = FontId::proportional(LABEL_SIZE);
+    let inked = |at: Pos2, anchor: Align2, text: String| {
+        painter.text(
+            at + egui::vec2(1.0, 1.0),
+            anchor,
+            &text,
+            font.clone(),
+            SHADOW,
+        );
+        painter.text(at, anchor, &text, font.clone(), INK);
+    };
+
     let north = rect.center_top() + egui::vec2(0.0, MARGIN / 2.0);
-    painter.text(north, Align2::CENTER_TOP, "N", font.clone(), palette.weak);
+    inked(north, Align2::CENTER_TOP, "N".to_owned());
 
     let longest = rect.width() / 3.0 / projection.points_per_meter;
     let meters = SCALE_BARS
@@ -169,22 +302,27 @@ fn legend(painter: &egui::Painter, rect: Rect, projection: Projection, palette: 
         .unwrap_or(SCALE_BARS[0]);
     let start = rect.left_bottom() + egui::vec2(MARGIN, -MARGIN);
     let end = start + egui::vec2(meters * projection.points_per_meter, 0.0);
-    painter.line_segment([start, end], Stroke::new(1.5, palette.weak));
-    painter.text(
+    painter.line_segment([start, end], Stroke::new(3.5, SHADOW));
+    painter.line_segment([start, end], Stroke::new(1.5, INK));
+    inked(
         start + egui::vec2(0.0, -MARGIN / 2.0),
         Align2::LEFT_BOTTOM,
         format!("{meters} m"),
-        font,
-        palette.weak,
     );
 }
 
-fn surface(water: &Water, projection: Projection, color: Color32) -> Shape {
-    let mut mesh = egui::Mesh::default();
+/// Returns the known surface of `water`, laid with the tiles of `texture`.
+fn surface(water: &Water, projection: Projection, texture: egui::TextureId) -> Shape {
+    let mut mesh = egui::Mesh::with_texture(texture);
     for triangle in &water.surface {
         let first = mesh.vertices.len() as u32;
         for corner in triangle {
-            mesh.colored_vertex(projection.position(*corner), color);
+            let pos = projection.position(*corner);
+            mesh.vertices.push(egui::epaint::Vertex {
+                pos,
+                uv: projection.tile_at(pos),
+                color: Color32::WHITE,
+            });
         }
         mesh.add_triangle(first, first + 1, first + 2);
     }
@@ -315,6 +453,19 @@ impl Projection {
         self.center + egui::vec2(east, -north) * self.points_per_meter
     }
 
+    /// Returns where on the tiles that the ground is laid with `position` on the map is,
+    /// counted in tiles, so that the ground stays put under the things on it.
+    fn tile_at(self, position: Pos2) -> Pos2 {
+        let east = self.origin.x() as f32 / 1_000.0;
+        let north = self.origin.y() as f32 / 1_000.0;
+        let across = (position - self.center) / self.points_per_meter;
+
+        Pos2::new(
+            (east + across.x) / TILE_METERS,
+            (-north + across.y) / TILE_METERS,
+        )
+    }
+
     fn length(self, length: Length) -> f32 {
         length.as_millimeters() as f32 / 1_000.0 * self.points_per_meter
     }
@@ -343,85 +494,10 @@ impl<'a> Dot<'a> {
     }
 }
 
-struct Palette {
-    ground: Color32,
-    water: Color32,
-    shore: Color32,
-    spruce: Color32,
-    pine: Color32,
-    birch: Color32,
-    rock: Color32,
-    bilberry: Color32,
-    lingonberry: Color32,
-    pile: Color32,
-    fire: Color32,
-    built: Color32,
-    strong: Color32,
-    weak: Color32,
-}
-
-impl Palette {
-    fn of(visuals: &egui::Visuals) -> Self {
-        let strong = visuals.strong_text_color();
-        let weak = visuals.weak_text_color();
-
-        if visuals.dark_mode {
-            Self {
-                ground: Color32::from_rgb(33, 40, 33),
-                water: Color32::from_rgb(40, 84, 128),
-                shore: Color32::from_rgb(112, 164, 212),
-                spruce: Color32::from_rgb(44, 128, 82),
-                pine: Color32::from_rgb(122, 158, 62),
-                birch: Color32::from_rgb(214, 204, 110),
-                rock: Color32::from_rgb(146, 146, 154),
-                bilberry: Color32::from_rgb(96, 116, 214),
-                lingonberry: Color32::from_rgb(214, 84, 96),
-                pile: Color32::from_rgb(196, 164, 118),
-                fire: Color32::from_rgb(255, 150, 40),
-                built: Color32::from_rgb(190, 130, 84),
-                strong,
-                weak,
-            }
-        } else {
-            Self {
-                ground: Color32::from_rgb(228, 232, 216),
-                water: Color32::from_rgb(150, 194, 232),
-                shore: Color32::from_rgb(54, 106, 158),
-                spruce: Color32::from_rgb(24, 98, 58),
-                pine: Color32::from_rgb(104, 146, 44),
-                birch: Color32::from_rgb(178, 160, 30),
-                rock: Color32::from_rgb(118, 118, 126),
-                bilberry: Color32::from_rgb(52, 70, 168),
-                lingonberry: Color32::from_rgb(176, 40, 56),
-                pile: Color32::from_rgb(140, 104, 56),
-                fire: Color32::from_rgb(226, 104, 0),
-                built: Color32::from_rgb(128, 78, 40),
-                strong,
-                weak,
-            }
-        }
-    }
-
-    fn of_kind(&self, kind: Kind) -> Color32 {
-        match kind {
-            Kind::Plant(PlantSpecies::Spruce) => self.spruce,
-            Kind::Plant(PlantSpecies::Pine) => self.pine,
-            Kind::Plant(PlantSpecies::Birch) => self.birch,
-            Kind::Plant(PlantSpecies::Bilberry) => self.bilberry,
-            Kind::Plant(PlantSpecies::Lingonberry) => self.lingonberry,
-            Kind::Rock => self.rock,
-            Kind::Lake => self.water,
-            Kind::Pile(_) => self.pile,
-            Kind::Structure(StructureKind::Campfire) => self.fire,
-            Kind::Structure(_) => self.built,
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use lords_sim::object::Object;
-    use lords_sim::world::{Rock, Thing};
+    use lords_sim::world::{PlantSpecies, Rock, Thing};
     use lords_sim::{Name, Sex, Simulation, World};
 
     use super::*;
@@ -459,6 +535,20 @@ mod tests {
         assert_eq!(at(10_000, 0), Pos2::new(220.0, 150.0));
         assert_eq!(at(-2_500, -5_000), Pos2::new(195.0, 160.0));
         assert_eq!(PROJECTION.length(Length::from_millimeters(1_500)), 3.0);
+    }
+
+    #[test]
+    fn ground_stays_put_under_what_is_on_it() {
+        let moved = Projection {
+            origin: Location::new(5_000 + 8_000, -3_000),
+            ..PROJECTION
+        };
+        let tile = PROJECTION.tile_at(Pos2::new(200.0, 150.0));
+
+        // Eight meters east is one tile over, which is 16 points at this scale.
+        assert_eq!(moved.tile_at(Pos2::new(200.0, 150.0)).x, tile.x + 1.0);
+        assert_eq!(PROJECTION.tile_at(Pos2::new(216.0, 150.0)).x, tile.x + 1.0);
+        assert_eq!(PROJECTION.tile_at(Pos2::new(200.0, 166.0)).y, tile.y + 1.0);
     }
 
     #[test]

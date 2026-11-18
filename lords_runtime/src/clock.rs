@@ -1,7 +1,7 @@
 use std::time::{Duration, Instant};
 
 /// The most ticks that are ever due at once, however late the clock is looked at.
-const MOST_DUE: u32 = 64;
+const MOST_DUE: u32 = 4_096;
 
 /// Decides when the next tick is due.
 #[derive(Debug)]

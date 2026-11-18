@@ -1,4 +1,6 @@
 mod life;
+mod politics;
+mod society;
 
 use std::sync::Arc;
 
@@ -9,12 +11,15 @@ use crate::item::{HEAVY_LOAD, Item};
 use crate::journal::{Entry, Tone};
 use crate::map::{self, Map, Surface};
 use crate::object::{Activity, Human, Living, Name, Sex};
+use crate::people::{PersonId, Role};
 use crate::perception::{self, Surroundings};
+use crate::politics::{Appeal, Issue, Law};
 use crate::route;
+use crate::settlement::Advance;
 use crate::space::{Length, Location};
 use crate::state::State;
 use crate::time::{TICKS_PER_SECOND, Timestamp};
-use crate::view::{View, Walk, Work};
+use crate::view::{PersonView, SettlementView, View, Walk, Work};
 use crate::world::index::Grid;
 use crate::world::{Area, AreaKind, StructureKind, Subject, Thing, ThingId, World};
 
@@ -49,6 +54,11 @@ pub struct Simulation {
     stale: bool,
     /// Whether something has happened that the player should not miss.
     alert: bool,
+    /// What the player is shown of the other people, nearest to them at heart first.
+    census: Arc<[PersonView]>,
+    town: Option<Arc<SettlementView>>,
+    /// Whether what is shown of the others and of the settlement may have changed.
+    society_stale: bool,
 }
 
 impl Simulation {
@@ -87,7 +97,12 @@ impl Simulation {
             kept,
             stale: false,
             alert: false,
+            census: Arc::from(Vec::new()),
+            town: None,
+            society_stale: false,
         };
+        simulation.ensure_protagonist();
+        simulation.refresh_society();
         simulation.look();
         simulation
     }
@@ -135,7 +150,7 @@ impl Simulation {
                 job,
                 subject: match job {
                     Job::Act { subject, .. } => world.kind(subject),
-                    Job::Craft(_) | Job::Consume(_) | Job::EatSnow => None,
+                    Job::Craft(_) | Job::Consume(_) | Job::EatSnow | Job::Appeal(_) => None,
                 },
                 done,
                 needed: self.needed(job),
@@ -159,6 +174,10 @@ impl Simulation {
             started: self.state.started,
             walked: Length::from_millimeters(self.state.walked as i64),
             death: self.state.death,
+            people: Arc::clone(&self.census),
+            settlement: self.town.clone(),
+            routine: self.state.routine,
+            past_lives: self.state.past_lives,
         }
     }
 
@@ -180,11 +199,20 @@ impl Simulation {
         if self.stale {
             self.look();
         }
+        if self.society_stale {
+            self.refresh_society();
+        }
     }
 
-    /// Applies a change requested from outside the simulation.
+    /// Applies a change requested from outside the simulation. Once the player character
+    /// has died, the only change there is to make is to live on as someone else.
     pub fn apply(&mut self, command: Command) {
         if self.state.death.is_some() {
+            if let Command::LiveOn(heir) = command {
+                self.live_on(heir);
+                self.look();
+                self.refresh_society();
+            }
             return;
         }
 
@@ -201,15 +229,29 @@ impl Simulation {
             Command::EatSnow => self.take_up(Job::EatSnow),
             Command::Sleep => self.lie_down(),
             Command::Drop(item, count) => self.drop(item, count),
+            Command::Take(item, count) => self.take(item, count),
+            Command::Assign(person, role) => self.assign(person, role),
+            Command::Plan(kind) => self.plan(kind),
+            Command::Pursue(advance) => self.pursue(advance),
+            Command::NameSettlement(name) => self.rename_settlement(name),
+            Command::SetRoutine(routine) => self.state.routine = routine,
+            Command::SetView(issue, lean) => self.set_view(issue, lean),
+            Command::Legislate(law, wanted) => self.legislate(law, wanted),
+            Command::SetSteward(steward) => self.set_steward(steward),
+            Command::Appeal(appeal) => self.take_up(Job::Appeal(appeal)),
+            Command::LiveOn(_) => {}
         }
         if self.stale {
             self.look();
+        }
+        if self.society_stale {
+            self.refresh_society();
         }
     }
 
     /// Sends the player walking to `subject`, to set about `intent` once there.
     fn walk_to(&mut self, subject: Subject, intent: Option<Job>) {
-        if !self.state.memory.knows(subject) {
+        if !self.knows(subject) {
             return;
         }
 
@@ -317,6 +359,16 @@ impl Simulation {
     fn look(&mut self) {
         self.stale = false;
         let sight = self.sight();
+        let cairn = self
+            .state
+            .settlement
+            .as_ref()
+            .map(|settlement| settlement.cairn);
+        let advances = self
+            .state
+            .settlement
+            .as_ref()
+            .map_or_else(Vec::new, |settlement| settlement.advances.clone());
         let State {
             player,
             world,
@@ -325,7 +377,8 @@ impl Simulation {
             ..
         } = &mut self.state;
         let eye = player.location();
-        let seen = perception::look(world, &self.grid, eye, sight);
+        let mut seen = perception::look(world, &self.grid, eye, sight);
+        perception::look_at_people(world, &self.grid, eye, sight, &mut seen.surroundings);
 
         for thing in self.in_sight.iter().chain(&seen.things) {
             memory.note_thing(*thing, *time);
@@ -346,7 +399,7 @@ impl Simulation {
             &seen,
             eye,
         ));
-        self.at_hand = Arc::new(at_hand(world, &seen.surroundings));
+        self.at_hand = Arc::new(at_hand(world, &seen.surroundings, cairn, advances));
         self.surroundings = Arc::new(seen.surroundings);
         self.in_sight = seen.things;
         if shore_learned {
@@ -380,8 +433,19 @@ impl Simulation {
 }
 
 /// Returns what is within reach of someone whose surroundings are `surroundings`.
-fn at_hand(world: &World, surroundings: &Surroundings) -> AtHand {
-    let mut at_hand = AtHand::default();
+///
+/// The common store counts as within reach by the `cairn` of the settlement, and in its
+/// storehouses.
+fn at_hand(
+    world: &World,
+    surroundings: &Surroundings,
+    cairn: Option<ThingId>,
+    advances: Vec<Advance>,
+) -> AtHand {
+    let mut at_hand = AtHand {
+        advances,
+        ..AtHand::default()
+    };
 
     for sighting in &surroundings.within_reach {
         let id = match sighting.subject {
@@ -390,6 +454,7 @@ fn at_hand(world: &World, surroundings: &Surroundings) -> AtHand {
                 at_hand.water = true;
                 continue;
             }
+            Subject::Person(_) => continue,
         };
 
         match world.thing(id) {
@@ -405,7 +470,25 @@ fn at_hand(world: &World, surroundings: &Surroundings) -> AtHand {
                     at_hand.fire_until = at_hand.fire_until.max(Some(structure.until()));
                 }
                 StructureKind::Bed => at_hand.bed = true,
-                kind if kind.is_shelter() => at_hand.shelter = at_hand.shelter.max(Some(kind)),
+                StructureKind::Well => at_hand.water = true,
+                kind @ (StructureKind::Kiln | StructureKind::Smithy) => {
+                    at_hand.workplaces.push(kind);
+                }
+                StructureKind::Cairn | StructureKind::Storehouse if at_hand.store.is_none() => {
+                    let store = cairn.and_then(|cairn| Some((cairn, world.structure(cairn)?)));
+                    if let Some((cairn, store)) = store {
+                        for stack in store.hold().stacks() {
+                            at_hand.loose.add_stack(*stack);
+                        }
+                        at_hand.store = Some(cairn);
+                    }
+                }
+                kind if kind.is_shelter() => {
+                    let better = at_hand.shelter.is_none_or(|shelter| !shelter.is_house());
+                    if better {
+                        at_hand.shelter = Some(kind);
+                    }
+                }
                 _ => {}
             },
             Some(Thing::Plant(_) | Thing::Rock(_)) | None => {}
@@ -426,7 +509,10 @@ pub enum Command {
     Stop,
     /// Has the player do something to a subject they know of, walking to it first if it
     /// is out of reach.
-    Act { verb: Verb, subject: Subject },
+    Act {
+        verb: Verb,
+        subject: Subject,
+    },
     /// Has the player make something of what they carry and what lies within reach.
     Craft(Recipe),
     /// Has the player eat or drink one of an item they carry.
@@ -437,6 +523,30 @@ pub enum Command {
     Sleep,
     /// Has the player put down some of what they carry.
     Drop(Item, u32),
+    /// Has the player take some of what lies within their reach, the common store of
+    /// their settlement included.
+    Take(Item, u32),
+    /// Gives someone who lives with the player something to do with their days.
+    Assign(PersonId, Role),
+    /// Plans a building of the settlement, to be built of what is in its store.
+    Plan(StructureKind),
+    /// Sets the settlement to working out an advance.
+    Pursue(Advance),
+    NameSettlement(String),
+    /// Has the player character see to eating, drinking, and sleeping by themselves,
+    /// or leaves that to the player again.
+    SetRoutine(bool),
+    /// Has the player live on as someone who lived with their character that has died.
+    LiveOn(PersonId),
+    /// Sets how far the player character leans to which side of an issue, from -2 to 2.
+    SetView(Issue, i8),
+    /// Puts a law in force, or takes it out of force, if the player leads and the
+    /// grown-ups of the settlement have it.
+    Legislate(Law, bool),
+    /// Leaves the running of the settlement the player leads to custom, or takes it back.
+    SetSteward(bool),
+    /// Has the player set about winning over the people of the settlement.
+    Appeal(Appeal),
 }
 
 #[cfg(test)]

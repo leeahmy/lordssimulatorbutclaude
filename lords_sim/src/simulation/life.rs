@@ -69,8 +69,8 @@ const SNOW_WATER: u32 = 200;
 const SNOW_CHILL: i32 = 100;
 
 /// The age from which each day may be the last, and how fast the chance of that grows.
-const OLD_AGE: u64 = 60;
-const OLD_AGE_ODDS: u64 = 200_000;
+pub(super) const OLD_AGE: u64 = 60;
+pub(super) const OLD_AGE_ODDS: u64 = 200_000;
 
 impl Simulation {
     /// Returns how hard the player is working at what they are doing.
@@ -80,14 +80,21 @@ impl Simulation {
             Some(Activity::Sleeping) => Effort::Sleeping,
             Some(Activity::Walking { .. }) => Effort::Walking,
             Some(Activity::Doing { job, .. }) => match job {
-                Job::Consume(_) | Job::EatSnow => Effort::Resting,
+                Job::Consume(_) | Job::EatSnow | Job::Appeal(_) => Effort::Resting,
                 Job::Act { verb, .. } => match verb {
                     Verb::Drink
                     | Verb::Fish
                     | Verb::AddStick
                     | Verb::AddLog
                     | Verb::Stoke
-                    | Verb::Light => Effort::Resting,
+                    | Verb::Light
+                    | Verb::Talk
+                    | Verb::Gift
+                    | Verb::Invite
+                    | Verb::Court
+                    | Verb::TryForChild
+                    | Verb::Hire
+                    | Verb::Deposit => Effort::Resting,
                     _ => Effort::Working,
                 },
                 Job::Craft(recipe) => match recipe.skill() {
@@ -119,12 +126,12 @@ impl Simulation {
             };
         }
         tenths += match at_hand.shelter {
-            Some(StructureKind::Cabin) => 100,
+            Some(kind) if kind.is_house() => 100,
             Some(_) => 30,
             None => 0,
         };
         if at_hand.fire {
-            tenths += if at_hand.shelter == Some(StructureKind::Cabin) {
+            tenths += if at_hand.shelter.is_some_and(StructureKind::is_house) {
                 200
             } else {
                 150
@@ -143,6 +150,7 @@ impl Simulation {
         let (seconds, skill) = match job {
             Job::Consume(item) => return item.food().map_or(1, |food| food.seconds),
             Job::EatSnow => return 120,
+            Job::Appeal(appeal) => return appeal.seconds(),
             Job::Craft(recipe) => (recipe.seconds(), Some(recipe.skill())),
             Job::Act { verb, subject } => (self.verb_seconds(verb, subject), verb.skill()),
         };
@@ -155,7 +163,7 @@ impl Simulation {
     fn verb_seconds(&self, verb: Verb, subject: Subject) -> u32 {
         let plant = match subject {
             Subject::Thing(id) => self.state.world.plant(id),
-            Subject::Area(_) => None,
+            Subject::Area(_) | Subject::Person(_) => None,
         };
 
         match verb {
@@ -167,14 +175,27 @@ impl Simulation {
             },
             Verb::DigRoots => 420,
             Verb::PickBerries => 180,
-            Verb::Fell => plant.map_or(300, |plant| {
-                (plant.trunk_diameter().as_millimeters() as u32 * 6).max(300)
-            }),
+            Verb::Fell => {
+                // Iron cuts twice as fast as stone.
+                let per_millimeter = if self.has(Item::IronAxe) > 0 { 3 } else { 6 };
+                plant.map_or(300, |plant| {
+                    (plant.trunk_diameter().as_millimeters() as u32 * per_millimeter).max(300)
+                })
+            }
+            Verb::DigClay => 600,
+            Verb::RakeOre => 900,
+            Verb::Hire => 300,
             Verb::PickUp | Verb::AddLog => 20,
             Verb::Drink | Verb::FillWater | Verb::TakeDown | Verb::Stoke => 60,
             Verb::Fish => 600,
             Verb::AddStick => 10,
             Verb::Light | Verb::Collect | Verb::HangFood => 120,
+            Verb::Talk => 600,
+            Verb::Gift | Verb::Deposit => 60,
+            Verb::Invite => 300,
+            Verb::Court => 900,
+            Verb::TryForChild => 1_800,
+            Verb::Build => 3_600,
         }
     }
 
@@ -201,7 +222,7 @@ impl Simulation {
         let repeats = match job {
             Job::Act { verb, .. } => verb.repeats(),
             Job::Craft(recipe) => recipe.repeats(),
-            Job::Consume(_) | Job::EatSnow => false,
+            Job::Consume(_) | Job::EatSnow | Job::Appeal(_) => false,
         };
         if finished && repeats {
             let gathering = matches!(job, Job::Act { .. });
@@ -260,7 +281,7 @@ impl Simulation {
 
         let there = match job {
             Job::Act { subject, .. } => self.is_within_reach(subject),
-            Job::Craft(_) | Job::Consume(_) | Job::EatSnow => true,
+            Job::Craft(_) | Job::Consume(_) | Job::EatSnow | Job::Appeal(_) => true,
         };
         if !there {
             return;
@@ -272,7 +293,7 @@ impl Simulation {
     }
 
     /// Starts on `job`, from where it was left if it is the job last left unfinished.
-    fn begin(&mut self, job: Job) {
+    pub(super) fn begin(&mut self, job: Job) {
         let done = match self.state.player.unfinished() {
             Some((unfinished, done)) if unfinished == job => done,
             _ => 0,
@@ -305,7 +326,7 @@ impl Simulation {
             .animal_mut()
             .set_activity(Some(Activity::Sleeping));
         let place = match (self.at_hand.shelter, self.at_hand.bed) {
-            (Some(StructureKind::Cabin), _) => "in the cabin",
+            (Some(kind), _) if kind.is_house() => "indoors",
             (Some(_), _) => "under the lean-to",
             (None, true) => "on the bough bed",
             (None, false) => "on the bare ground",
@@ -313,7 +334,7 @@ impl Simulation {
         self.note(Tone::Plain, format!("You lie down to sleep {place}."));
     }
 
-    fn wake(&mut self, words: &str) {
+    pub(super) fn wake(&mut self, words: &str) {
         if self.state.player.activity() == Some(Activity::Sleeping) {
             self.state.player.animal_mut().set_activity(None);
             self.note(Tone::Plain, words);
@@ -333,7 +354,7 @@ impl Simulation {
         );
     }
 
-    fn is_within_reach(&self, subject: Subject) -> bool {
+    pub(super) fn is_within_reach(&self, subject: Subject) -> bool {
         self.surroundings
             .within_reach
             .iter()
@@ -341,7 +362,12 @@ impl Simulation {
     }
 
     /// Returns how many of `item` the player has to use, carried or lying within reach.
-    fn has(&self, item: Item) -> u32 {
+    pub(super) fn has_axe(&self) -> bool {
+        self.at_hand
+            .has_tool(self.state.player.carried(), Item::StoneAxe)
+    }
+
+    pub(super) fn has(&self, item: Item) -> u32 {
         self.at_hand.count(self.state.player.carried(), item)
     }
 
@@ -353,8 +379,12 @@ impl Simulation {
 
         match job {
             Job::Act { verb, subject } => self.check_act(verb, subject),
+            Job::Appeal(appeal) => self.check_appeal(appeal),
             Job::Craft(recipe) => {
                 let lacks = self.at_hand.lacks(carried, recipe);
+                if recipe == Recipe::Cairn && self.state.settlement.is_some() {
+                    return Err("You have founded a settlement already.".to_owned());
+                }
                 if lacks.is_empty() {
                     return match recipe.product() {
                         Product::Structure(_) if self.site().is_none() => {
@@ -375,7 +405,7 @@ impl Simulation {
                 let Some(_) = item.food() else {
                     return Err(format!("{} is not for eating.", item.name()));
                 };
-                if !carried.has(item) {
+                if self.has(item) == 0 {
                     Err(format!("You have no {}.", item.name().to_lowercase()))
                 } else if item.is_drink() && body.is_quenched() {
                     Err("You are not thirsty.".to_owned())
@@ -406,7 +436,7 @@ impl Simulation {
         let Some(kind) = world.kind(subject) else {
             return Err("That is no longer there.".to_owned());
         };
-        if !self.state.memory.knows(subject) {
+        if !self.knows(subject) {
             return Err("You do not know of such a thing.".to_owned());
         }
         if !Verb::for_kind(kind).contains(&verb) {
@@ -416,7 +446,7 @@ impl Simulation {
             ));
         }
         if let Some(tool) = verb.tool()
-            && self.has(tool) == 0
+            && !self.at_hand.has_tool(carried, tool)
         {
             return Err(format!(
                 "You need a {} for that.",
@@ -427,10 +457,11 @@ impl Simulation {
         let name = kind.name().to_lowercase();
         let (plant, structure) = match subject {
             Subject::Thing(id) => (world.plant(id), world.structure(id)),
-            Subject::Area(_) => (None, None),
+            Subject::Area(_) | Subject::Person(_) => (None, None),
         };
         let no_room = || Err("You cannot carry any more.".to_owned());
-        let iced_over = self.conditions.frozen && self.has(Item::StoneAxe) == 0;
+        // A well never freezes over.
+        let iced_over = self.conditions.frozen && !self.has_axe() && structure.is_none();
         let ice =
             || Err("The lake is frozen over. You need an axe to cut a hole in the ice.".to_owned());
 
@@ -491,7 +522,7 @@ impl Simulation {
                         let stacks = pile.items().stacks();
                         stacks.iter().any(|stack| carried.room_for(stack.item) > 0)
                     }),
-                    Subject::Area(_) => false,
+                    Subject::Area(_) | Subject::Person(_) => false,
                 };
                 if fits { Ok(()) } else { no_room() }
             }
@@ -572,7 +603,37 @@ impl Simulation {
                     Err("You have no raw meat or fish to hang.".to_owned())
                 }
             }
-            Verb::Fell | Verb::TakeDown => Ok(()),
+            Verb::Fell | Verb::TakeDown | Verb::Build => Ok(()),
+            Verb::DigClay | Verb::RakeOre => {
+                let knows_iron = self.state.settlement.as_ref().is_some_and(|settlement| {
+                    settlement.knows(crate::settlement::Advance::Ironworking)
+                });
+                let item = if verb == Verb::DigClay {
+                    Item::Clay
+                } else {
+                    Item::BogOre
+                };
+                if self.conditions.frozen {
+                    Err("The shore is frozen hard.".to_owned())
+                } else if verb == Verb::RakeOre && !knows_iron {
+                    Err("Nobody here knows what to look for, or what to do with it.".to_owned())
+                } else if carried.room_for(item) == 0 {
+                    no_room()
+                } else {
+                    Ok(())
+                }
+            }
+            Verb::Hire => match subject {
+                Subject::Person(id) => self.check_hire(id),
+                Subject::Thing(_) | Subject::Area(_) => Ok(()),
+            },
+            Verb::Deposit => self.check_deposit(),
+            Verb::Talk | Verb::Gift | Verb::Invite | Verb::Court | Verb::TryForChild => {
+                match subject {
+                    Subject::Person(id) => self.check_person(verb, id),
+                    Subject::Thing(_) | Subject::Area(_) => Ok(()),
+                }
+            }
         }
     }
 
@@ -588,16 +649,21 @@ impl Simulation {
     }
 
     /// Returns how many of the pots the player carries have no water in them.
-    fn empty_pots(&self) -> u32 {
+    pub(super) fn empty_pots(&self) -> u32 {
         let carried = self.state.player.carried();
         let full = carried.count(Item::Water) + carried.count(Item::BoiledWater);
 
-        carried.count(Item::BarkPot).saturating_sub(full)
+        let room: u32 = carried
+            .stacks()
+            .iter()
+            .map(|stack| stack.item.holds() * stack.count)
+            .sum();
+        room.saturating_sub(full)
     }
 
     /// Returns where something built by the player where they stand goes: next to them,
     /// on dry ground.
-    fn site(&self) -> Option<Location> {
+    pub(super) fn site(&self) -> Option<Location> {
         const STEP: i64 = 700;
         let at = self.state.player.location();
 
@@ -620,6 +686,7 @@ impl Simulation {
             Job::Act { verb, subject } => (self.finish_act(verb, subject), verb.skill()),
             Job::Craft(recipe) => (self.finish_craft(recipe), Some(recipe.skill())),
             Job::Consume(item) => (self.consume(item), None),
+            Job::Appeal(appeal) => (self.finish_appeal(appeal), None),
             Job::EatSnow => {
                 let body = self.state.player.body_mut();
                 body.drink(SNOW_WATER);
@@ -648,10 +715,10 @@ impl Simulation {
         let Some(food) = item.food() else {
             return false;
         };
-        let eaten = self.state.player.carried_mut().take(item, 1);
-        if eaten.count == 0 {
+        if self.has(item) == 0 {
             return false;
         }
+        self.use_up(item, 1);
 
         self.state.player.body_mut().take_in(food);
         let name = item.name().to_lowercase();
@@ -678,8 +745,10 @@ impl Simulation {
 
     fn finish_act(&mut self, verb: Verb, subject: Subject) -> bool {
         let now = self.state.time;
-        let Subject::Thing(id) = subject else {
-            return self.finish_at_water(verb);
+        let id = match subject {
+            Subject::Thing(id) => id,
+            Subject::Area(_) => return self.finish_at_water(verb, false),
+            Subject::Person(id) => return self.finish_with_person(verb, id),
         };
         let Some(kind) = self.state.world.kind(subject) else {
             return false;
@@ -745,7 +814,7 @@ impl Simulation {
                     [Stack::new(Item::Log, logs), Stack::new(Item::Stick, sticks)],
                 )));
 
-                if self.state.rng.chance(AXE_BREAKING_CHANCE) {
+                if self.has(Item::IronAxe) == 0 && self.state.rng.chance(AXE_BREAKING_CHANCE) {
                     self.use_up(Item::StoneAxe, 1);
                     self.note(
                         Tone::Bad,
@@ -874,7 +943,18 @@ impl Simulation {
                 }
                 self.note(Tone::Plain, format!("You take down the {name}."));
             }
-            Verb::Drink | Verb::FillWater | Verb::Fish => return false,
+            Verb::Drink | Verb::FillWater => return self.finish_at_water(verb, true),
+            Verb::Deposit => return self.deposit(),
+            Verb::Build => return self.build(id),
+            Verb::Fish
+            | Verb::Talk
+            | Verb::Gift
+            | Verb::Invite
+            | Verb::Court
+            | Verb::TryForChild
+            | Verb::DigClay
+            | Verb::RakeOre
+            | Verb::Hire => return false,
         }
         true
     }
@@ -917,8 +997,20 @@ impl Simulation {
         true
     }
 
-    fn finish_at_water(&mut self, verb: Verb) -> bool {
+    /// Brings about what `verb` done at water comes to, the water being `clean` if it is
+    /// that of a well.
+    fn finish_at_water(&mut self, verb: Verb, clean: bool) -> bool {
         match verb {
+            Verb::Drink if clean => {
+                let body = self.state.player.body_mut();
+                body.drink(body.thirst());
+                self.note(Tone::Plain, "You drink your fill from the well.");
+            }
+            Verb::FillWater if clean => {
+                let pots = self.empty_pots();
+                self.state.player.carried_mut().add(Item::BoiledWater, pots);
+                self.note(Tone::Plain, "You fill your pots from the well.");
+            }
             Verb::Drink => {
                 let body = self.state.player.body_mut();
                 body.drink(body.thirst());
@@ -930,6 +1022,17 @@ impl Simulation {
                 let pots = self.empty_pots();
                 self.state.player.carried_mut().add(Item::Water, pots);
                 self.note(Tone::Plain, "You fill your pots from the lake.");
+            }
+            Verb::DigClay => {
+                self.give(Stack::new(Item::Clay, 2));
+                self.note(Tone::Plain, "You dig grey clay out of the shore.");
+            }
+            Verb::RakeOre => {
+                self.give(Stack::new(Item::BogOre, 2));
+                self.note(
+                    Tone::Plain,
+                    "You rake rusty lumps of ore out of the shallows.",
+                );
             }
             Verb::Fish => {
                 let level = i64::from(self.state.player.skills().level(Skill::Fishing));
@@ -1005,7 +1108,12 @@ impl Simulation {
                         .map_or(0, |(_, count)| *count);
                     structure.stoke(u64::from(sticks * Item::Stick.burn_time()), now);
                 }
-                self.add_thing(Thing::Structure(structure));
+                let id = self.add_thing(Thing::Structure(structure));
+                if kind == StructureKind::Cairn {
+                    self.note(Tone::Good, recipe.done());
+                    self.found(id);
+                    return true;
+                }
             }
         }
 
@@ -1014,7 +1122,7 @@ impl Simulation {
     }
 
     /// Hands `stack` to the player, who puts down what of it they cannot carry.
-    fn give(&mut self, stack: Stack) {
+    pub(super) fn give(&mut self, stack: Stack) {
         let carried = self.state.player.carried_mut();
         let fits = stack.count.min(carried.room_for(stack.item));
 
@@ -1048,31 +1156,69 @@ impl Simulation {
 
     /// Uses up `count` of `item`, of those carried first and then of those lying within
     /// reach.
-    fn use_up(&mut self, item: Item, count: u32) {
-        let mut left = count - self.state.player.carried_mut().take(item, count).count;
+    pub(super) fn use_up(&mut self, item: Item, count: u32) {
+        let left = count - self.state.player.carried_mut().take(item, count).count;
+        self.take_loose(item, left);
+    }
+
+    /// Takes up to `count` of `item` from what lies within reach, from the piles first
+    /// and then from the common store if that is within reach, and returns what was had.
+    pub(super) fn take_loose(&mut self, item: Item, count: u32) -> Stack {
+        let mut taken = Stack {
+            count: 0,
+            ..Stack::new(item, 0)
+        };
+        let add = |taken: &mut Stack, stack: Stack| {
+            if stack.count > 0 {
+                taken.fresh = if taken.count == 0 {
+                    stack.fresh
+                } else {
+                    taken.fresh.min(stack.fresh)
+                };
+                taken.count += stack.count;
+            }
+        };
 
         for id in self.at_hand.piles.clone() {
-            if left == 0 {
-                break;
-            }
             let Some(pile) = self.state.world.pile_mut(id) else {
                 continue;
             };
-            left -= pile.items_mut().take(item, left).count;
+            let stack = pile.items_mut().take(item, count - taken.count);
+            add(&mut taken, stack);
             if pile.items().is_empty() {
                 self.state.world.remove_thing(id);
             }
-            self.stale = true;
         }
+        let before = taken.count;
+        if let Some(store) = self.at_hand.store
+            && let Some(cairn) = self.state.world.structure_mut(store)
+        {
+            let stack = cairn.hold_mut().take(item, count - taken.count);
+            add(&mut taken, stack);
+        }
+        let out_of_store = Stack {
+            count: taken.count - before,
+            ..taken
+        };
+
+        if taken.count > 0 {
+            self.stale = true;
+            self.society_stale = true;
+        }
+        if out_of_store.count > 0 {
+            self.credit(-Self::worth(&out_of_store));
+        }
+        taken
     }
 
-    fn add_thing(&mut self, thing: Thing) {
+    pub(super) fn add_thing(&mut self, thing: Thing) -> ThingId {
         let (at, footprint) = (thing.location(), thing.footprint());
         let id = self.state.world.add_thing(thing);
 
         self.grid.insert(id, at, footprint);
         self.kept.push(id);
         self.stale = true;
+        id
     }
 
     /// Lets what happens by the minute happen: the weather turns, fires burn down, and the
@@ -1085,7 +1231,7 @@ impl Simulation {
         let sleeping = self.state.player.activity() == Some(Activity::Sleeping);
         let effort = self.effort();
         let felt = self.felt();
-        let bed = self.at_hand.bed || self.at_hand.shelter == Some(StructureKind::Cabin);
+        let bed = self.at_hand.bed || self.at_hand.shelter.is_some_and(StructureKind::is_house);
         let body = self.state.player.body_mut();
         let before = body.ailments();
         let death = body.pass_minute(effort, felt, bed, now);
@@ -1120,8 +1266,10 @@ impl Simulation {
             self.note(Tone::Bad, "You collapse where you stand and fall asleep.");
         }
 
+        self.follow_routine();
         if now.as_seconds().is_multiple_of(SECONDS_PER_HOUR) {
             self.pass_hour();
+            self.move_people();
         }
         if now.as_seconds().is_multiple_of(SECONDS_PER_DAY) {
             self.pass_day();
@@ -1200,6 +1348,18 @@ impl Simulation {
         let fishing = u64::from(self.state.player.skills().level(Skill::Fishing));
         let frozen = self.conditions.frozen;
         let now = self.state.time;
+        // How fast food goes off in the common store, in hundredths of how fast it does
+        // in the open: half as fast in a storehouse, and half as fast again in jars.
+        let stored = self.kept.iter().any(|id| {
+            let structure = self.state.world.structure(*id);
+            structure.is_some_and(|structure| structure.kind() == StructureKind::Storehouse)
+        });
+        let potted = self
+            .state
+            .settlement
+            .as_ref()
+            .is_some_and(|settlement| settlement.knows(crate::settlement::Advance::Pottery));
+        let keeping = if stored { 50 } else { 100 } * if potted { 50 } else { 100 } / 100;
 
         for stack in self.state.player.carried_mut().spoil(seconds) {
             self.note(
@@ -1237,6 +1397,9 @@ impl Simulation {
                 StructureKind::SprungSnare => {
                     structure.hold_mut().spoil(seconds);
                 }
+                StructureKind::Cairn => {
+                    structure.hold_mut().spoil(seconds * keeping / 100);
+                }
                 StructureKind::FishTrap => {
                     let chance = FISH_TRAP_CHANCE + FISH_TRAP_CHANCE_PER_LEVEL * fishing;
                     let room = structure.hold().count(Item::RawFish) < FISH_TRAP_HOLDS;
@@ -1252,8 +1415,10 @@ impl Simulation {
         }
     }
 
-    /// Lets what happens by the day happen: the old may die.
+    /// Lets what happens by the day happen: the others live their day, and the old may die.
     fn pass_day(&mut self) {
+        self.live_a_day();
+
         let born = Date::from_timestamp(self.state.player.birth());
         let age = Date::from_timestamp(self.state.time).years_since(born);
 
@@ -1265,7 +1430,7 @@ impl Simulation {
         }
     }
 
-    fn die(&mut self, cause: Cause) {
+    pub(super) fn die(&mut self, cause: Cause) {
         let player = &mut self.state.player;
         player.body_mut().die();
         player.animal_mut().set_activity(None);
@@ -1278,6 +1443,7 @@ impl Simulation {
         });
         self.alert = true;
         self.note(Tone::Bad, format!("You have died of {}.", cause.name()));
+        self.record_death();
     }
 }
 

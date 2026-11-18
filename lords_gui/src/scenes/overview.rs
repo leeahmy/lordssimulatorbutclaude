@@ -4,7 +4,9 @@ mod crafting;
 mod inventory;
 mod journal;
 mod map;
+mod politics;
 mod skills;
+mod society;
 mod surroundings;
 mod time_bar;
 
@@ -25,6 +27,7 @@ use super::{MainMenu, MenuAction, SAVE, Scene, SceneResponse, Shared, top_panel}
 const SAVE_DIALOG_WIDTH: f32 = 300.0;
 const SAVE_LABEL_LIMIT: usize = 40;
 const DEATH_DIALOG_WIDTH: f32 = 340.0;
+const HEIRS_HEIGHT: f32 = 140.0;
 
 pub struct Overview {
     game: Playthrough,
@@ -44,14 +47,18 @@ enum Tab {
     Surroundings,
     Inventory,
     Crafting,
+    People,
+    Politics,
     Skills,
 }
 
 impl Tab {
-    const ALL: [Self; 4] = [
+    const ALL: [Self; 6] = [
         Self::Surroundings,
         Self::Inventory,
         Self::Crafting,
+        Self::People,
+        Self::Politics,
         Self::Skills,
     ];
 
@@ -60,6 +67,8 @@ impl Tab {
             Self::Surroundings => "Surroundings",
             Self::Inventory => "Inventory",
             Self::Crafting => "Crafting",
+            Self::People => "People",
+            Self::Politics => "Politics",
             Self::Skills => "Skills",
         }
     }
@@ -108,10 +117,14 @@ impl Scene for Overview {
         if let Some(command) = on_map.command.or(in_list.command) {
             runtime.send(command);
         }
+        if view.death.is_none() {
+            self.death_acknowledged = false;
+        }
         if let Some(death) = view.death.filter(|_| !self.death_acknowledged) {
             match death_dialog(ui, view, death, format) {
                 Some(AfterDeath::Leave) => leave = true,
                 Some(AfterDeath::Stay) => self.death_acknowledged = true,
+                Some(AfterDeath::LiveOn(heir)) => runtime.send(Command::LiveOn(heir)),
                 None => {}
             }
         }
@@ -232,6 +245,8 @@ fn central(ui: &mut egui::Ui, view: &View, tab: &mut Tab, hovered: Option<Subjec
                 Tab::Surroundings => pointed = surroundings::show(ui, view, hovered),
                 Tab::Inventory => pointed.command = inventory::show(ui, view),
                 Tab::Crafting => pointed.command = crafting::show(ui, view),
+                Tab::People => pointed.command = society::show(ui, view),
+                Tab::Politics => pointed.command = politics::show(ui, view),
                 Tab::Skills => skills::show(ui, view),
             });
         pointed.command = asked.or(pointed.command.take());
@@ -245,6 +260,8 @@ fn central(ui: &mut egui::Ui, view: &View, tab: &mut Tab, hovered: Option<Subjec
 enum AfterDeath {
     Leave,
     Stay,
+    /// Living on as one of those who lived with the dead.
+    LiveOn(lords_sim::people::PersonId),
 }
 
 fn death_dialog(
@@ -260,6 +277,29 @@ fn death_dialog(
         ui.heading("Your life has ended");
         ui.add_space(4.0);
         ui.label(epitaph(view, death, format));
+        ui.add_space(8.0);
+
+        let heirs: Vec<_> = view.heirs().collect();
+        if heirs.is_empty() {
+            ui.label(RichText::new("Nobody is left to carry on after you.").weak());
+        } else {
+            ui.label("Those you leave behind carry on. Live on as one of them:");
+            egui::ScrollArea::vertical()
+                .max_height(HEIRS_HEIGHT)
+                .show(ui, |ui| {
+                    for heir in heirs {
+                        let words = format!(
+                            "{}, {}, {}",
+                            heir.name,
+                            heir.age,
+                            heir.bond.name().to_lowercase()
+                        );
+                        if ui.button(words).clicked() {
+                            choice = Some(AfterDeath::LiveOn(heir.id));
+                        }
+                    }
+                });
+        }
         ui.add_space(8.0);
 
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {

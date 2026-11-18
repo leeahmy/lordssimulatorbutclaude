@@ -169,6 +169,22 @@ pub enum Bearing {
     Northwest,
 }
 
+impl Bearing {
+    /// Returns the compass point in words, such as "northeast".
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::North => "north",
+            Self::Northeast => "northeast",
+            Self::East => "east",
+            Self::Southeast => "southeast",
+            Self::South => "south",
+            Self::Southwest => "southwest",
+            Self::West => "west",
+            Self::Northwest => "northwest",
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

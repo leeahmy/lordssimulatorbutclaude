@@ -21,7 +21,11 @@ pub fn show(ui: &mut egui::Ui, view: &View, highlighted: Option<Subject>) -> Poi
     let surroundings = &view.surroundings;
     for category in Category::ALL {
         let reachable = surroundings.within_reach.iter();
-        let farther = surroundings.nearby.iter().chain(&surroundings.in_sight);
+        let farther = surroundings
+            .nearby
+            .iter()
+            .chain(&surroundings.in_sight)
+            .chain(&surroundings.people);
         let rows: Vec<Row<'_>> = reachable
             .map(|sighting| (sighting, true))
             .chain(farther.map(|sighting| (sighting, false)))
@@ -36,7 +40,7 @@ pub fn show(ui: &mut egui::Ui, view: &View, highlighted: Option<Subject>) -> Poi
             continue;
         }
 
-        let section = section(ui, category, &rows);
+        let section = section(ui, view, category, &rows);
         pointed.command = pointed.command.or(section.chosen);
         pointed.hovered = pointed.hovered.or(section.hovered);
     }
@@ -64,6 +68,7 @@ fn row_of(view: &View, subject: Subject) -> Option<Subject> {
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 enum Category {
+    People,
     Camp,
     Ground,
     Trees,
@@ -73,7 +78,8 @@ enum Category {
 }
 
 impl Category {
-    const ALL: [Self; 6] = [
+    const ALL: [Self; 7] = [
+        Self::People,
         Self::Camp,
         Self::Ground,
         Self::Trees,
@@ -90,11 +96,13 @@ impl Category {
             Kind::Lake => Self::Water,
             Kind::Pile(_) => Self::Ground,
             Kind::Structure(_) => Self::Camp,
+            Kind::Person(_) => Self::People,
         }
     }
 
     fn title(self) -> &'static str {
         match self {
+            Self::People => "People",
             Self::Camp => "Camp",
             Self::Ground => "On the ground",
             Self::Trees => "Trees",
@@ -122,7 +130,7 @@ struct Section {
     hovered: Option<Subject>,
 }
 
-fn section(ui: &mut egui::Ui, category: Category, rows: &[Row<'_>]) -> Section {
+fn section(ui: &mut egui::Ui, view: &View, category: Category, rows: &[Row<'_>]) -> Section {
     let mut section = Section::default();
     let seen: u32 = rows.iter().map(|row| row.sighting.count).sum();
     let row_height = ui.spacing().interact_size.y + ROW_SPACING.y;
@@ -149,7 +157,12 @@ fn section(ui: &mut egui::Ui, category: Category, rows: &[Row<'_>]) -> Section {
                 .show(ui, |ui| {
                     for row in rows {
                         let sighting = row.sighting;
-                        let label = RichText::new(label(sighting));
+                        let label = RichText::new(match view.person(sighting.subject) {
+                            Some(person) if person.met => {
+                                format!("{}, {}", person.name, person.bond.name().to_lowercase())
+                            }
+                            _ => label(sighting),
+                        });
                         let mut shown = ui.label(if row.highlighted {
                             label.strong()
                         } else {

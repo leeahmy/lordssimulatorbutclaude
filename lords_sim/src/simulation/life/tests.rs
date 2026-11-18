@@ -328,7 +328,7 @@ fn campfire_burns_down_and_is_lit_again_and_fed() {
 
     let burning_until = |sim: &Simulation| match fire {
         Subject::Thing(id) => sim.state.world.structure(id).map(Structure::until),
-        Subject::Area(_) => None,
+        Subject::Area(_) | Subject::Person(_) => None,
     };
     let before = burning_until(&sim).expect("the fire is there");
     sim.apply(Command::Act {

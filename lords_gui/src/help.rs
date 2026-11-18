@@ -7,7 +7,7 @@ const DIALOG_WIDTH: f32 = 520.0;
 /// How much of the window's height the guide takes at most.
 const MAX_HEIGHT_SHARE: f32 = 0.7;
 
-const CHAPTERS: [(&str, &[&str]); 7] = [
+const CHAPTERS: [(&str, &[&str]); 12] = [
     (
         "The life",
         &[
@@ -70,6 +70,82 @@ const CHAPTERS: [(&str, &[&str]); 7] = [
         &[
             "Sleep when you are tired, or you will collapse sooner or later. Nobody falls \
              asleep cold, and the cold wakes a sleeper, so see to your fire first.",
+        ],
+    ),
+    (
+        "Other people",
+        &[
+            "You are not the only one in the forest. Now and then smoke rises where a \
+             wanderer has made camp, and the journal tells which way. They stay for a week \
+             or two and move on, unless you give them a reason to stay.",
+            "Talk with them, once a day counts for the most, and give them food. Someone who \
+             has come to trust you can be asked to stay with you. Someone fond enough of you \
+             may share your life, and under a roof the two of you may have a child.",
+            "The People tab lists everyone you know of. Children grow up, and from twelve \
+             they work.",
+        ],
+    ),
+    (
+        "A settlement",
+        &[
+            "Raise a cairn of ten stones, from the Crafting tab, to found a settlement. Its \
+             common store is at hand by the cairn and in storehouses: put your load in it, \
+             take from it, and make things straight out of it.",
+            "Give each of your people something to do in the People tab. Foragers, fishers, \
+             and trappers feed the store, woodcutters and gatherers fill it, builders put \
+             up what you plan, crafters clothe people, and thinkers work out advances. \
+             Everyone eats out of the store, and those who go hungry leave or starve.",
+            "Plan huts and longhouses to house people, for the frost takes those left \
+             outside, and keep logs in the store to heat them. Advances such as farming, \
+             pottery, and ironworking let more people live off the same forest. A \
+             settlement that does well draws others to it.",
+        ],
+    ),
+    (
+        "Standing and leading",
+        &[
+            "You begin as a newcomer to a hamlet that someone else leads. Only whoever \
+             leads sets people to work, plans buildings, and makes laws. Until that is you, \
+             the settlement runs itself, and you live in it as one of its people.",
+            "The Politics tab shows who would be chosen if a leader were chosen today. Each \
+             grown-up backs whoever they think the most of: you by their regard for you, \
+             others by the esteem they are held in. Kin back kin, and people back those who \
+             hold what they hold.",
+            "Win regard by talking with people, giving them food, bringing goods to the \
+             common store, and working on buildings. Speak by the cairn, hold feasts out of \
+             your own food, and once writing is known put up notices. Taking more out of \
+             the store than you bring to it is noticed, and held against you.",
+            "A band and a village choose a leader at the moot each spring. A town, which \
+             takes twenty-five people, a meeting hall, and writing, elects one every four \
+             years, with a month of campaigning before.",
+        ],
+    ),
+    (
+        "Views and laws",
+        &[
+            "Say what you hold on four matters in the Politics tab: whether goods are \
+             shared, whether to keep to the old ways, who decides, and how strangers are \
+             met. Everyone has views of their own, and children take after their parents.",
+            "Each matter has a law on either side, and each law changes how the settlement \
+             fares. The leader of a band makes laws alone. In a village and a town a law \
+             needs half of the grown-ups for it. Every law pleases those it suits and \
+             angers the rest.",
+            "What is made how: tools, clothes, and camp things you make with your own \
+             hands, some only once your people know the craft and you stand by the kiln or \
+             the smithy. Buildings are a village effort, planned by the leader out of the \
+             common store. Advances are never worked out by hand: thinkers are kept on \
+             extra food by the leader, or hired by you with food of your own.",
+        ],
+    ),
+    (
+        "Generations",
+        &[
+            "Turn on the daily routine by the activity line, and you eat, drink, and sleep \
+             by yourself when you have the means. Then time can be run fast, up to a day \
+             a second, to see years pass.",
+            "Nobody lives for ever. When you die, you can live on as any of those who lived \
+             with you and are twelve or older: your child, your partner, or anyone of your \
+             settlement. What you built, learned, and knew of the land stays.",
         ],
     ),
     (

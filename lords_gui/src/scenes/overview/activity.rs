@@ -1,4 +1,5 @@
 use egui::RichText;
+use lords_sim::politics::Appeal;
 use lords_sim::view::{Walk, Work};
 use lords_sim::{Command, Job, View};
 
@@ -54,6 +55,18 @@ pub fn show(ui: &mut egui::Ui, view: &View) -> Option<Command> {
                 command = Some(Command::EatSnow);
             }
         }
+
+        let mut routine = view.routine;
+        let toggled = ui
+            .checkbox(&mut routine, "Daily routine")
+            .on_hover_text(
+                "Eat, drink, and sleep by yourself when you need to and have the means. \
+                 Lets time run fast without you starving at your own table.",
+            )
+            .changed();
+        if toggled {
+            command = Some(Command::SetRoutine(routine));
+        }
     });
     ui.add_space(SPACING);
 
@@ -87,6 +100,9 @@ fn doing(job: Job) -> String {
         }
         Job::Consume(item) => format!("Eating {}", item.name().to_lowercase()),
         Job::EatSnow => "Eating snow".to_owned(),
+        Job::Appeal(Appeal::Speech) => "Speaking to the village".to_owned(),
+        Job::Appeal(Appeal::Feast) => "Holding a feast".to_owned(),
+        Job::Appeal(Appeal::Notices) => "Putting up notices".to_owned(),
     }
 }
 

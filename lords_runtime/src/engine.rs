@@ -18,6 +18,11 @@ pub(crate) enum Request {
     Capture(Sender<Arc<State>>),
 }
 
+/// How long the ticks due at once may take together, and how many ticks pass between
+/// looking at the time.
+const BUDGET: Duration = Duration::from_millis(12);
+const BUDGET_CHECK: u32 = 32;
+
 pub(crate) struct Engine {
     sim: Simulation,
     clock: Clock,
@@ -58,10 +63,16 @@ impl Engine {
     /// The clock is paused if something happens in them that the player should not miss.
     pub(crate) fn advance(&mut self, now: Instant) -> bool {
         let due = self.clock.take_due_ticks(now);
-        for _ in 0..due {
+        let started = Instant::now();
+        for tick in 0..due {
             self.sim.tick();
             if self.sim.take_alert() {
                 self.clock.pause();
+                break;
+            }
+            // Ticks that do not fit in the time there is for them are let go of, so that
+            // the simulation falls behind its speed rather than stops answering.
+            if tick % BUDGET_CHECK == BUDGET_CHECK - 1 && started.elapsed() > BUDGET {
                 break;
             }
         }

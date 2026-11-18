@@ -14,6 +14,16 @@ pub const RANGE: Length = SIGHT_LIMIT;
 pub struct Map {
     pub things: Vec<Mark>,
     pub waters: Vec<Water>,
+    pub people: Vec<Figure>,
+}
+
+/// Someone on the map. Everyone in the forest is, whether in sight or not, since the smoke
+/// of a camp gives away those who are not.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct Figure {
+    pub subject: Subject,
+    pub bond: crate::people::Bond,
+    pub location: Location,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -146,5 +156,21 @@ pub(crate) fn chart(
         })
         .collect();
 
-    Map { things, waters }
+    let people = world
+        .people()
+        .filter(|(_, person)| in_range(&person.location))
+        .filter_map(|(id, person)| {
+            Some(Figure {
+                subject: Subject::Person(id),
+                bond: world.bond(id)?,
+                location: person.location,
+            })
+        })
+        .collect();
+
+    Map {
+        things,
+        waters,
+        people,
+    }
 }

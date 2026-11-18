@@ -21,13 +21,17 @@ pub enum Item {
     Stone,
     HarePelt,
     Bone,
+    Clay,
+    BogOre,
 
     Knife,
     FireSteel,
     StoneAxe,
+    IronAxe,
     BoneNeedle,
     FishingRod,
     BarkPot,
+    ClayPot,
     Snare,
     FishTrap,
 
@@ -39,6 +43,7 @@ pub enum Item {
     Bilberries,
     Lingonberries,
     InnerBark,
+    Grain,
     HareCarcass,
     RawMeat,
     CookedMeat,
@@ -64,7 +69,7 @@ pub struct Food {
 }
 
 impl Item {
-    pub const ALL: [Self; 33] = [
+    pub const ALL: [Self; 38] = [
         Self::Stick,
         Self::Log,
         Self::SpruceBough,
@@ -74,12 +79,16 @@ impl Item {
         Self::Stone,
         Self::HarePelt,
         Self::Bone,
+        Self::Clay,
+        Self::BogOre,
         Self::Knife,
         Self::FireSteel,
         Self::StoneAxe,
+        Self::IronAxe,
         Self::BoneNeedle,
         Self::FishingRod,
         Self::BarkPot,
+        Self::ClayPot,
         Self::Snare,
         Self::FishTrap,
         Self::FurHat,
@@ -89,6 +98,7 @@ impl Item {
         Self::Bilberries,
         Self::Lingonberries,
         Self::InnerBark,
+        Self::Grain,
         Self::HareCarcass,
         Self::RawMeat,
         Self::CookedMeat,
@@ -112,6 +122,10 @@ impl Item {
             Self::Stone => "Stone",
             Self::HarePelt => "Hare pelt",
             Self::Bone => "Bone",
+            Self::Clay => "Clay",
+            Self::BogOre => "Bog ore",
+            Self::IronAxe => "Iron axe",
+            Self::ClayPot => "Clay pot",
             Self::Knife => "Knife",
             Self::FireSteel => "Fire steel",
             Self::StoneAxe => "Stone axe",
@@ -127,6 +141,7 @@ impl Item {
             Self::Bilberries => "Bilberries",
             Self::Lingonberries => "Lingonberries",
             Self::InnerBark => "Pine inner bark",
+            Self::Grain => "Rye",
             Self::HareCarcass => "Hare",
             Self::RawMeat => "Raw meat",
             Self::CookedMeat => "Cooked meat",
@@ -145,9 +160,11 @@ impl Item {
             Self::Stick => 400,
             Self::Log => 15_000,
             Self::SpruceBough => 500,
-            Self::BirchBark | Self::SpruceRoot | Self::Bone | Self::InnerBark => 100,
+            Self::BirchBark | Self::SpruceRoot | Self::Bone | Self::InnerBark | Self::Grain => 100,
             Self::Cordage | Self::Snare => 80,
-            Self::Stone => 1_000,
+            Self::Stone | Self::Clay | Self::BogOre => 1_000,
+            Self::IronAxe => 1_200,
+            Self::ClayPot => 800,
             Self::HarePelt => 300,
             Self::Knife => 150,
             Self::FireSteel => 50,
@@ -179,6 +196,7 @@ impl Item {
             Self::Bilberries => (35, 50, 0, 60),
             Self::Lingonberries => (30, 50, 0, 60),
             Self::InnerBark => (60, 0, 0, 180),
+            Self::Grain => (340, 0, 0, 180),
             Self::RawMeat => (450, 100, 300, 240),
             Self::CookedMeat => (450, 50, 0, 240),
             Self::DriedMeat => (430, 0, 0, 240),
@@ -225,6 +243,25 @@ impl Item {
             Self::FurCoat => 90,
             Self::FurBoots => 40,
             _ => 0,
+        }
+    }
+
+    /// Returns how many liters of water the item holds, which is none unless it is a pot.
+    pub const fn holds(self) -> u32 {
+        match self {
+            Self::BarkPot => 1,
+            Self::ClayPot => 3,
+            _ => 0,
+        }
+    }
+
+    /// Returns the item that does for this one wherever this one is called for as a tool,
+    /// if there is such an item.
+    pub const fn stand_in(self) -> Option<Self> {
+        match self {
+            Self::StoneAxe => Some(Self::IronAxe),
+            Self::BarkPot => Some(Self::ClayPot),
+            _ => None,
         }
     }
 

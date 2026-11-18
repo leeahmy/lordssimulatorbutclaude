@@ -283,9 +283,15 @@ pub struct Structure {
     /// When a trap was set, or food hung up to dry.
     #[serde(default)]
     since: Timestamp,
-    /// What a trap has caught, or what hangs on a rack.
+    /// What a trap has caught, what hangs on a rack, or what a settlement has in store.
     #[serde(default)]
     hold: Inventory,
+    /// What a building site is to become.
+    #[serde(default)]
+    plan: Option<StructureKind>,
+    /// How many hours of work have been put into a building site.
+    #[serde(default)]
+    work: u32,
 }
 
 impl Structure {
@@ -299,7 +305,41 @@ impl Structure {
             until: Timestamp::EPOCH,
             since: object.creation(),
             hold: Inventory::default(),
+            plan: None,
+            work: 0,
         }
+    }
+
+    /// Returns the site of a building of `plan` to be.
+    pub fn site(object: Object, plan: StructureKind) -> Self {
+        Self {
+            plan: Some(plan),
+            ..Self::new(object, StructureKind::Site)
+        }
+    }
+
+    pub fn plan(&self) -> Option<StructureKind> {
+        self.plan
+    }
+
+    pub fn work(&self) -> u32 {
+        self.work
+    }
+
+    /// Puts `hours` of work into a building site, and returns whether that makes
+    /// `needed` hours, at which the site becomes what was planned.
+    pub(crate) fn build(&mut self, hours: u32, needed: u32) -> bool {
+        let Some(plan) = self.plan else {
+            return false;
+        };
+
+        self.work += hours;
+        if self.work < needed {
+            return false;
+        }
+        self.kind = plan;
+        self.plan = None;
+        true
     }
 
     pub fn location(&self) -> Location {
@@ -362,6 +402,21 @@ pub enum StructureKind {
     SprungSnare,
     FishTrap,
     DryingRack,
+    /// The pile of stones a settlement is founded with, by which its common store is kept.
+    Cairn,
+    /// A building being built.
+    Site,
+    Hut,
+    Longhouse,
+    Storehouse,
+    Smokehouse,
+    Workshop,
+    Field,
+    Well,
+    Hall,
+    Kiln,
+    Dock,
+    Smithy,
 }
 
 impl StructureKind {
@@ -372,7 +427,13 @@ impl StructureKind {
             Self::Bed => 2_000,
             Self::Cabin => 4_000,
             Self::Snare | Self::SprungSnare => 300,
-            Self::DryingRack => 1_500,
+            Self::DryingRack | Self::Cairn | Self::Well | Self::Kiln => 1_500,
+            Self::Hall => 7_000,
+            Self::Dock | Self::Smithy => 4_000,
+            Self::Site | Self::Hut | Self::Storehouse | Self::Workshop => 4_000,
+            Self::Smokehouse => 2_500,
+            Self::Longhouse => 7_000,
+            Self::Field => 8_000,
         })
     }
 
@@ -381,15 +442,20 @@ impl StructureKind {
     const fn height(self) -> Length {
         Length::from_millimeters(match self {
             Self::Campfire | Self::Fireplace | Self::Snare | Self::SprungSnare => 300,
-            Self::Bed => 200,
+            Self::Bed | Self::Field | Self::Site | Self::Dock => 200,
             Self::FishTrap => 500,
-            Self::LeanTo | Self::Cabin | Self::DryingRack => 1_500,
+            _ => 1_500,
         })
     }
 
     /// Returns whether the structure keeps the rain and the wind off whoever is at it.
     pub const fn is_shelter(self) -> bool {
-        matches!(self, Self::LeanTo | Self::Cabin)
+        matches!(self, Self::LeanTo) || self.is_house()
+    }
+
+    /// Returns whether the structure has walls and a roof to live under.
+    pub const fn is_house(self) -> bool {
+        matches!(self, Self::Cabin | Self::Hut | Self::Longhouse)
     }
 }
 

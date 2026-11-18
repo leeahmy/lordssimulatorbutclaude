@@ -10,6 +10,7 @@ pub use self::area::{Area, AreaKind};
 pub use self::store::{Bits, Store};
 pub use self::thing::{Pile, Plant, PlantSpecies, Rock, Structure, StructureKind, Thing};
 use crate::item::Item;
+use crate::people::{Bond, FRIENDLY, Person, PersonId};
 use crate::space::{Length, Location};
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -37,6 +38,7 @@ impl AreaId {
 pub enum Subject {
     Thing(ThingId),
     Area(AreaId),
+    Person(PersonId),
 }
 
 /// What a subject is, as far as telling it apart from others goes.
@@ -48,6 +50,7 @@ pub enum Kind {
     /// A pile of mostly the item.
     Pile(Item),
     Structure(StructureKind),
+    Person(Bond),
 }
 
 impl Kind {
@@ -71,6 +74,20 @@ impl Kind {
             Self::Structure(StructureKind::SprungSnare) => "Sprung snare",
             Self::Structure(StructureKind::FishTrap) => "Fish trap",
             Self::Structure(StructureKind::DryingRack) => "Drying rack",
+            Self::Structure(StructureKind::Cairn) => "Settlement cairn",
+            Self::Structure(StructureKind::Site) => "Building site",
+            Self::Structure(StructureKind::Hut) => "Hut",
+            Self::Structure(StructureKind::Longhouse) => "Longhouse",
+            Self::Structure(StructureKind::Storehouse) => "Storehouse",
+            Self::Structure(StructureKind::Smokehouse) => "Smokehouse",
+            Self::Structure(StructureKind::Workshop) => "Workshop",
+            Self::Structure(StructureKind::Field) => "Field",
+            Self::Structure(StructureKind::Well) => "Well",
+            Self::Structure(StructureKind::Hall) => "Meeting hall",
+            Self::Structure(StructureKind::Kiln) => "Kiln",
+            Self::Structure(StructureKind::Dock) => "Dock",
+            Self::Structure(StructureKind::Smithy) => "Smithy",
+            Self::Person(bond) => bond.name(),
         }
     }
 
@@ -86,6 +103,13 @@ pub struct World {
     /// The things that are no longer there.
     #[serde(default)]
     gone: Bits,
+    /// Everyone there is and has been, apart from what is kept of the player character
+    /// as a [`Human`](crate::Human).
+    #[serde(default)]
+    people: Store<Person>,
+    /// Which of the people the player character is.
+    #[serde(default)]
+    protagonist: Option<PersonId>,
 }
 
 impl World {
@@ -177,8 +201,63 @@ impl World {
         (0..).map(AreaId).zip(&self.areas)
     }
 
+    pub fn add_person(&mut self, person: Person) -> PersonId {
+        PersonId(self.people.push(person))
+    }
+
+    /// Returns the person, dead or alive.
+    pub fn person(&self, id: PersonId) -> Option<&Person> {
+        self.people.get(id.0)
+    }
+
+    pub(crate) fn person_mut(&mut self, id: PersonId) -> Option<&mut Person> {
+        self.people.get_mut(id.0)
+    }
+
+    /// Returns everyone there is and has been.
+    pub fn everyone(&self) -> impl Iterator<Item = (PersonId, &Person)> {
+        (0..).map(PersonId).zip(self.people.iter())
+    }
+
+    /// Returns everyone alive and in the forest apart from the player character.
+    pub fn people(&self) -> impl Iterator<Item = (PersonId, &Person)> {
+        self.everyone()
+            .filter(|(id, person)| person.is_present() && Some(*id) != self.protagonist)
+    }
+
+    /// Returns which of the people the player character is.
+    pub fn protagonist(&self) -> Option<PersonId> {
+        self.protagonist
+    }
+
+    pub(crate) fn set_protagonist(&mut self, id: PersonId) {
+        self.protagonist = Some(id);
+    }
+
+    /// Returns what the person is to the player character.
+    pub fn bond(&self, id: PersonId) -> Option<Bond> {
+        let person = self.person(id)?;
+        let me = self.protagonist;
+
+        Some(if me.is_some() && person.partner == me {
+            Bond::Partner
+        } else if me.is_some() && person.parents.contains(&me) {
+            Bond::Child
+        } else if person.member {
+            Bond::Companion
+        } else if person.regard >= FRIENDLY {
+            Bond::Friend
+        } else {
+            Bond::Stranger
+        })
+    }
+
     pub fn kind(&self, subject: Subject) -> Option<Kind> {
         match subject {
+            Subject::Person(id) => {
+                let present = self.person(id).is_some_and(Person::is_present);
+                self.bond(id).filter(|_| present).map(Kind::Person)
+            }
             Subject::Thing(id) => self.thing(id).map(Thing::kind),
             Subject::Area(id) => self.area(id).map(|area| match area.kind() {
                 AreaKind::Lake => Kind::Lake,
@@ -205,6 +284,10 @@ impl World {
                 (thing.location(), thing.footprint())
             }
             Subject::Area(id) => (self.area(id)?.nearest_shore(from), Length::ZERO),
+            Subject::Person(id) => {
+                let person = self.person(id).filter(|person| person.is_present())?;
+                (person.location, Person::GIRTH)
+            }
         };
         if from.distance_to(nearest) <= clearance + reach {
             return Some(from);

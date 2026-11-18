@@ -21,6 +21,18 @@ It is the first of May, and nothing is asked of you but to live.
   their season, fell trees, fish, and set snares and fish traps.
 - **Things to make.** Cordage, an axe, a fishing rod, pots, fur clothes, a campfire, a
   lean-to, a drying rack, and in the end a log cabin, all from what the forest gives.
+- **Other people.** Wanderers camp in the forest. Befriend them, ask them to stay, take a
+  partner, and raise children.
+- **A settlement of your own.** Found one and give your people work: foragers, fishers,
+  trappers, woodcutters, farmers, builders, crafters, and thinkers. Plan huts, longhouses,
+  storehouses, workshops, fields, and wells, and work out advances from smoking and pottery
+  to farming, ironworking, and writing.
+- **Standing and politics.** You start as a newcomer in someone else's hamlet. Earn regard,
+  win the moot, and lead. Bands grow into villages and towns, with laws put to the vote,
+  views that divide people, speeches, feasts, notices, and elections.
+- **Generations.** Run time at up to a day a second while your character keeps to a daily
+  routine. When you die, live on as your child, your partner, or anyone of your settlement.
+- **A map in pixel art** that changes with the seasons, the snow, and the night.
 - **Skills that grow** with use, a journal of what has happened, and saves that carry on from
   where you left.
 
