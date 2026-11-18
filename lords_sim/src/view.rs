@@ -20,9 +20,11 @@ pub struct View {
     pub walk: Option<Walk>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Walk {
     pub toward: Kind,
     pub destination: Location,
+    /// The places the walk turns at on the way to `destination` in order.
+    pub via: Vec<Location>,
     pub remaining: Length,
 }

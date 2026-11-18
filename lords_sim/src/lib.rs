@@ -2,6 +2,7 @@ pub mod map;
 pub mod memory;
 pub mod object;
 pub mod perception;
+mod route;
 mod simulation;
 pub mod space;
 mod state;

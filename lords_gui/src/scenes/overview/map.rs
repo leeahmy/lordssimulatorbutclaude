@@ -1,3 +1,4 @@
+use std::iter;
 use std::ops::RangeInclusive;
 
 use egui::{Align2, Color32, FontId, Pos2, Rect, Sense, Shape, Stroke};
@@ -118,9 +119,12 @@ fn chart(ui: &mut egui::Ui, view: &View, reach: &mut f32, highlighted: Option<Su
             painter.circle_stroke(dot.center, dot.radius + HIGHLIGHT_GAP, ring);
         }
     }
-    if let Some(walk) = view.walk {
-        let route = [rect.center(), projection.position(walk.destination)];
-        painter.line_segment(route, Stroke::new(1.0, palette.strong));
+    if let Some(walk) = &view.walk {
+        let turns = walk.via.iter().chain([&walk.destination]);
+        let route = iter::once(rect.center())
+            .chain(turns.map(|turn| projection.position(*turn)))
+            .collect();
+        painter.add(Shape::line(route, Stroke::new(1.0, palette.strong)));
     }
     painter.circle_filled(rect.center(), PLAYER_RADIUS, palette.strong);
     painter.circle_stroke(

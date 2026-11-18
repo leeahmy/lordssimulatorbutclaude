@@ -51,18 +51,33 @@ pub(crate) struct Surface {
 }
 
 impl Surface {
-    /// Works the triangles out again if `memory` knows more of the shore than it did.
-    pub(crate) fn update(&mut self, id: AreaId, area: &Area, memory: &Memory) {
+    /// Works the triangles out again if `memory` knows more of the shore than it did, and
+    /// returns whether it did.
+    pub(crate) fn update(&mut self, id: AreaId, area: &Area, memory: &Memory) -> bool {
         let corners: Vec<u32> = (0..area.outline().len() as u32)
             .filter(|corner| {
                 memory.knows_edge(id, *corner) || memory.knows_edge(id, area.edge_before(*corner))
             })
             .collect();
 
-        if corners != self.corners {
+        let changed = corners != self.corners;
+        if changed {
             self.triangles = area.triangles(&corners);
             self.corners = corners;
         }
+        changed
+    }
+
+    /// Returns `area` with only the corners that are known.
+    pub(crate) fn shape(&self, area: &Area) -> Area {
+        let outline = area.outline();
+        let corners = self
+            .corners
+            .iter()
+            .map(|corner| outline[*corner as usize])
+            .collect();
+
+        Area::new(area.kind(), corners)
     }
 }
 

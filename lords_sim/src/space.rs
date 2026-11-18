@@ -106,6 +106,22 @@ impl Location {
         }
     }
 
+    /// Returns the location `step` farther from `other` than this one, or this one itself
+    /// if the two are the same.
+    pub fn away_from(self, other: Self, step: Length) -> Self {
+        let distance = i128::from(self.distance_to(other).0);
+        if distance == 0 {
+            return self;
+        }
+
+        let (dx, dy) = other.offset_to(self);
+        let step = i128::from(step.0);
+        Self {
+            x: self.x + (dx * step / distance) as i64,
+            y: self.y + (dy * step / distance) as i64,
+        }
+    }
+
     /// Returns the compass point nearest to the direction of `other`, which is north if
     /// the two locations are the same.
     pub fn bearing_to(self, other: Self) -> Bearing {
@@ -199,6 +215,17 @@ mod tests {
             HERE.toward(target, Length::from_meters(5)),
             offset(3_000, 4_000)
         );
+    }
+
+    #[test]
+    fn step_away_keeps_to_the_line_from_the_other() {
+        let other = offset(-30_000, -40_000);
+
+        assert_eq!(
+            HERE.away_from(other, Length::from_meters(5)),
+            offset(3_000, 4_000)
+        );
+        assert_eq!(HERE.away_from(HERE, Length::from_meters(5)), HERE);
     }
 
     #[test]

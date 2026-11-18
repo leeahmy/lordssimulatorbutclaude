@@ -88,9 +88,12 @@ impl World {
     }
 
     pub fn is_water(&self, at: Location) -> bool {
-        self.areas
-            .iter()
-            .any(|area| area.kind() == AreaKind::Lake && area.contains(at))
+        self.lake_at(at).is_some()
+    }
+
+    pub fn lake_at(&self, at: Location) -> Option<(AreaId, &Area)> {
+        self.areas()
+            .find(|(_, area)| area.kind() == AreaKind::Lake && area.contains(at))
     }
 
     /// Returns where to stand, coming from `from`, to have `subject` within `reach`.

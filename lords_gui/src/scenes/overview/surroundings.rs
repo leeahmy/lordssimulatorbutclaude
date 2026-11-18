@@ -22,7 +22,7 @@ pub fn show(ui: &mut egui::Ui, view: &View, highlighted: Option<Subject>) -> Poi
         egui::ScrollArea::vertical()
             .auto_shrink(false)
             .show(ui, |ui| {
-                if activity(ui, view.walk) {
+                if activity(ui, view.walk.as_ref()) {
                     pointed.command = Some(Command::Stop);
                 }
 
@@ -110,7 +110,7 @@ struct Section {
     hovered: Option<Subject>,
 }
 
-fn activity(ui: &mut egui::Ui, walk: Option<Walk>) -> bool {
+fn activity(ui: &mut egui::Ui, walk: Option<&Walk>) -> bool {
     let mut stop = false;
 
     ui.horizontal(|ui| {

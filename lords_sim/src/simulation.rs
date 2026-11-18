@@ -3,11 +3,13 @@ use std::sync::Arc;
 use crate::map::{self, Map, Surface};
 use crate::object::{Activity, Human, Living, Name, Sex};
 use crate::perception::{self, Surroundings};
+use crate::route;
+use crate::space::{Length, Location};
 use crate::state::State;
 use crate::time::{TICKS_PER_SECOND, Timestamp};
 use crate::view::{View, Walk};
 use crate::world::index::Grid;
-use crate::world::{Subject, ThingId, World};
+use crate::world::{Area, AreaKind, Subject, ThingId, World};
 
 pub struct Simulation {
     state: State,
@@ -16,8 +18,8 @@ pub struct Simulation {
     surfaces: Vec<Surface>,
     surroundings: Arc<Surroundings>,
     map: Arc<Map>,
-    /// The things the player saw when they last looked.
     in_sight: Vec<ThingId>,
+    route: Vec<Location>,
 }
 
 impl Simulation {
@@ -45,6 +47,7 @@ impl Simulation {
             surroundings: Arc::default(),
             map: Arc::default(),
             in_sight: Vec::new(),
+            route: Vec::new(),
         };
         simulation.look();
         simulation
@@ -61,11 +64,21 @@ impl Simulation {
             Activity::Walking {
                 toward,
                 destination,
-            } => Some(Walk {
-                toward: self.state.world.kind(toward)?,
-                destination,
-                remaining: player.location().distance_to(destination),
-            }),
+            } => {
+                let mut remaining = Length::ZERO;
+                let mut at = player.location();
+                for stop in self.route.iter().copied().chain([destination]) {
+                    remaining = remaining + at.distance_to(stop);
+                    at = stop;
+                }
+
+                Some(Walk {
+                    toward: self.state.world.kind(toward)?,
+                    destination,
+                    via: self.route.clone(),
+                    remaining,
+                })
+            }
         });
 
         View {
@@ -88,7 +101,10 @@ impl Simulation {
         match command {
             Command::Reset => self.state.time = Timestamp::EPOCH,
             Command::WalkTo(subject) => self.walk_to(subject),
-            Command::Stop => self.state.player.animal_mut().set_activity(None),
+            Command::Stop => {
+                self.state.player.animal_mut().set_activity(None);
+                self.route.clear();
+            }
         }
     }
 
@@ -107,25 +123,74 @@ impl Simulation {
             });
 
         self.state.player.animal_mut().set_activity(activity);
+        self.plan_route();
     }
 
-    /// Moves a walking player a tick's worth closer to where they are going.
     fn walk(&mut self) {
         let Some(Activity::Walking { destination, .. }) = self.state.player.activity() else {
             return;
         };
-        let step = Human::WALKING_SPEED / TICKS_PER_SECOND as i64;
-        let next = self.state.player.location().toward(destination, step);
-        let blocked = self.state.world.is_water(next);
+        let start = self.state.player.location();
+        let mut at = start;
+        let mut left = Human::WALKING_SPEED / TICKS_PER_SECOND as i64;
+        let mut learned = false;
 
-        let player = self.state.player.animal_mut();
-        if blocked || next == destination {
-            player.set_activity(None);
+        while left > Length::ZERO {
+            let target = self.route.first().copied().unwrap_or(destination);
+            let next = at.toward(target, left);
+
+            if let Some((id, lake)) = self.state.world.lake_at(next) {
+                let memory = &mut self.state.memory;
+                let found = lake
+                    .nearest_on_shore(next)
+                    .map(|(edge, _)| edge)
+                    .filter(|edge| !memory.knows_edge(id, *edge));
+                match found {
+                    Some(edge) => {
+                        memory.note_edge(id, edge);
+                        learned = true;
+                    }
+                    None => self.state.player.animal_mut().set_activity(None),
+                }
+                break;
+            }
+
+            left = left - at.distance_to(next);
+            at = next;
+            if next != target {
+                break;
+            }
+            if self.route.is_empty() {
+                self.state.player.animal_mut().set_activity(None);
+                break;
+            }
+            self.route.remove(0);
         }
-        if !blocked {
-            player.move_to(next);
+
+        if at != start || learned {
+            self.state.player.animal_mut().move_to(at);
             self.look();
         }
+    }
+
+    fn plan_route(&mut self) {
+        let Some(Activity::Walking { destination, .. }) = self.state.player.activity() else {
+            self.route.clear();
+            return;
+        };
+
+        self.route = route::plan(self.state.player.location(), destination, &self.lakes());
+    }
+
+    fn lakes(&self) -> Vec<Area> {
+        self.state
+            .world
+            .areas()
+            .zip(&self.surfaces)
+            .filter(|((_, area), _)| area.kind() == AreaKind::Lake)
+            .map(|((_, area), surface)| surface.shape(area))
+            .filter(|shape| shape.outline().len() >= 2)
+            .collect()
     }
 
     /// Takes in what the player sees from where they are, and commits it to memory.
@@ -145,8 +210,9 @@ impl Simulation {
         for (area, edge) in &seen.shores {
             memory.note_edge(*area, *edge);
         }
+        let mut shore_learned = false;
         for ((id, area), surface) in world.areas().zip(&mut self.surfaces) {
-            surface.update(id, area, memory);
+            shore_learned |= surface.update(id, area, memory);
         }
 
         self.map = Arc::new(map::chart(
@@ -159,6 +225,9 @@ impl Simulation {
         ));
         self.surroundings = Arc::new(seen.surroundings);
         self.in_sight = seen.things;
+        if shore_learned {
+            self.plan_route();
+        }
     }
 }
 
@@ -178,8 +247,7 @@ mod tests {
     use super::*;
     use crate::map::Mark;
     use crate::object::Object;
-    use crate::space::{Length, Location};
-    use crate::world::{Area, AreaKind, Kind, Plant, PlantSpecies, Rock, Thing};
+    use crate::world::{Kind, Plant, PlantSpecies, Rock, Thing};
 
     fn birch(x: i64, y: i64) -> Thing {
         Thing::Plant(Plant::new(
@@ -244,14 +312,29 @@ mod tests {
         })
     }
 
-    fn walk_until_done(sim: &mut Simulation) -> u32 {
-        let mut ticks = 0;
+    /// Ticks until the player stops walking, and returns where they were after each tick.
+    fn walk_until_done(sim: &mut Simulation) -> Vec<Location> {
+        let mut path = Vec::new();
         while sim.state().player.activity().is_some() {
-            assert!(ticks < 1_000, "the walk never ended");
+            assert!(path.len() < 1_000, "the walk never ended");
             sim.tick();
-            ticks += 1;
+
+            let at = sim.state().player.location();
+            assert!(
+                !sim.state().world.is_water(at),
+                "walked into water at {at:?}"
+            );
+            path.push(at);
         }
-        ticks
+        path
+    }
+
+    fn within_reach(sim: &Simulation, subject: Subject) -> bool {
+        let view = sim.view();
+        view.surroundings
+            .within_reach
+            .iter()
+            .any(|sighting| sighting.subject == subject)
     }
 
     #[test]
@@ -302,6 +385,7 @@ mod tests {
             Some(Walk {
                 toward: Kind::Plant(PlantSpecies::Birch),
                 destination: Location::new(0, 19_450),
+                via: Vec::new(),
                 remaining: Length::from_millimeters(19_450),
             })
         );
@@ -309,25 +393,68 @@ mod tests {
         sim.tick();
         assert_eq!(sim.state().player.location(), Location::new(0, 1_400));
 
-        assert_eq!(walk_until_done(&mut sim), 13);
+        assert_eq!(walk_until_done(&mut sim).len(), 13);
         assert_eq!(sim.state().player.location(), Location::new(0, 19_450));
         assert_eq!(sim.view().walk, None);
         assert_eq!(sim.view().surroundings.within_reach.len(), 1);
     }
 
-    #[test]
-    fn walk_ends_at_the_edge_of_water() {
+    /// A simulation of a player who has set off for a tree behind a lake, a little east of
+    /// straight across it, along with that tree.
+    fn walk_across_water() -> (Simulation, Subject) {
         let mut world = World::default();
         world.add_area(lake(30_000, 50_000));
-        let tree = Subject::Thing(world.add_thing(birch(0, 60_000)));
+        let tree = Subject::Thing(world.add_thing(birch(5_000, 60_000)));
         let mut sim = simulation(world);
-
         sim.apply(Command::WalkTo(tree));
-        walk_until_done(&mut sim);
 
-        let stopped_at = sim.state().player.location();
-        assert_eq!(stopped_at, Location::new(0, 29_400));
-        assert!(!sim.state().world.is_water(stopped_at));
+        (sim, tree)
+    }
+
+    #[test]
+    fn walk_goes_around_water_by_the_shorter_side() {
+        let (mut sim, tree) = walk_across_water();
+        assert_eq!(sim.view().walk.map(|walk| walk.via.len()), Some(2));
+
+        let path = walk_until_done(&mut sim);
+
+        assert!(path.iter().any(|at| at.x() > 20_000));
+        assert!(path.iter().all(|at| at.x() > -20_000));
+        assert!(within_reach(&sim, tree));
+    }
+
+    #[test]
+    fn walk_turns_aside_once_the_water_in_the_way_is_seen() {
+        let mut world = World::default();
+        world.add_area(lake(310_000, 330_000));
+        let tree = world.add_thing(birch(5_000, 340_000));
+        let mut state = State {
+            world,
+            ..State::new(Name::default(), Sex::Female)
+        };
+        state.memory.note_thing(tree, Timestamp::EPOCH);
+        let mut sim = Simulation::from_state(state);
+
+        sim.apply(Command::WalkTo(Subject::Thing(tree)));
+        assert_eq!(sim.view().walk.map(|walk| walk.via), Some(Vec::new()));
+
+        let path = walk_until_done(&mut sim);
+
+        assert!(path.iter().any(|at| at.x() > 20_000));
+        assert!(within_reach(&sim, Subject::Thing(tree)));
+    }
+
+    #[test]
+    fn walk_around_water_carries_on_from_a_state() {
+        let (mut sim, _) = walk_across_water();
+        for _ in 0..30 {
+            sim.tick();
+        }
+
+        let mut resumed = Simulation::from_state(sim.state().clone());
+
+        assert_eq!(resumed.view().walk, sim.view().walk);
+        assert_eq!(walk_until_done(&mut resumed), walk_until_done(&mut sim));
     }
 
     #[test]

@@ -49,6 +49,12 @@ impl Area {
         inside
     }
 
+    /// Returns whether the straight way from `from` to `to` crosses or touches the outline.
+    pub fn crosses(&self, from: Location, to: Location) -> bool {
+        self.edges()
+            .any(|(start, end)| meet([from, to], [start, end]))
+    }
+
     /// Returns the point of the outline nearest to `from`, which is `from` itself if the
     /// area has no outline.
     pub fn nearest_shore(&self, from: Location) -> Location {
@@ -145,6 +151,21 @@ fn turn(a: Location, b: Location, c: Location) -> i128 {
     let ((a_x, a_y), (b_x, b_y), (c_x, c_y)) = (coordinates(a), coordinates(b), coordinates(c));
 
     (b_x - a_x) * (c_y - a_y) - (b_y - a_y) * (c_x - a_x)
+}
+
+fn meet([a, b]: [Location; 2], [c, d]: [Location; 2]) -> bool {
+    let (c_side, d_side) = (turn(a, b, c).signum(), turn(a, b, d).signum());
+    let (a_side, b_side) = (turn(c, d, a).signum(), turn(c, d, b).signum());
+
+    if [a_side, b_side, c_side, d_side] == [0; 4] {
+        let overlap = |first: [i64; 2], second: [i64; 2]| {
+            first[0].min(first[1]) <= second[0].max(second[1])
+                && second[0].min(second[1]) <= first[0].max(first[1])
+        };
+        return overlap([a.x(), b.x()], [c.x(), d.x()]) && overlap([a.y(), b.y()], [c.y(), d.y()]);
+    }
+
+    c_side * d_side <= 0 && a_side * b_side <= 0
 }
 
 fn nearest_on_edge(start: Location, end: Location, from: Location) -> Location {
@@ -247,6 +268,25 @@ mod tests {
         );
         assert_eq!(lake.edge_before(5), 4);
         assert_eq!(lake.edge_before(0), 7);
+    }
+
+    #[test]
+    fn way_crosses_the_outline_where_it_meets_any_edge() {
+        let lake = lake();
+        let crosses = |from: (i64, i64), to: (i64, i64)| {
+            lake.crosses(Location::new(from.0, from.1), Location::new(to.0, to.1))
+        };
+
+        assert!(crosses((-5_000, 5_000), (25_000, 5_000)));
+        assert!(crosses((10_000, 7_000), (10_000, -5_000)));
+        assert!(crosses((-5_000, -5_000), (0, 0)));
+        assert!(crosses((-5_000, 0), (5_000, 0)));
+        assert!(crosses((10_000, 4_000), (10_000, 4_000)));
+
+        assert!(!crosses((-5_000, -1), (25_000, -1)));
+        assert!(!crosses((10_000, 9_000), (10_000, 12_000)));
+        assert!(!crosses((-5_000, 0), (-1, 0)));
+        assert!(!crosses((-5_000, -5_000), (-5_000, -5_000)));
     }
 
     #[test]
