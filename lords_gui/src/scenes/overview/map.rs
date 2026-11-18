@@ -5,7 +5,7 @@ use egui::{Align2, Color32, FontId, Pos2, Rect, Sense, Shape, Stroke};
 use lords_sim::map::{Map, Mark, RANGE, Water};
 use lords_sim::object::Living;
 use lords_sim::time::gregorian::{SECONDS_PER_DAY, SECONDS_PER_HOUR, SECONDS_PER_MINUTE};
-use lords_sim::world::{Kind, PlantSpecies};
+use lords_sim::world::{Kind, PlantSpecies, StructureKind};
 use lords_sim::{Command, Length, Location, Subject, Timestamp, View};
 
 use crate::scenes::count;
@@ -111,7 +111,7 @@ fn chart(ui: &mut egui::Ui, view: &View, reach: &mut f32, highlighted: Option<Su
         };
 
         painter.circle_filled(dot.center, dot.radius, fill);
-        if dot.mark.kind == Kind::Rock {
+        if !matches!(dot.mark.kind, Kind::Plant(_)) {
             painter.circle_stroke(dot.center, dot.radius, Stroke::new(1.0, edge));
         }
         if lit(dot.mark.subject) {
@@ -329,9 +329,10 @@ struct Dot<'a> {
 
 impl<'a> Dot<'a> {
     fn of(mark: &'a Mark, projection: Projection) -> Self {
-        let spread = match mark.kind {
-            Kind::Plant(_) => CANOPY_SPREAD,
-            Kind::Rock | Kind::Lake => 1.0,
+        let spread = if mark.kind.is_tree() {
+            CANOPY_SPREAD
+        } else {
+            1.0
         };
 
         Self {
@@ -350,6 +351,11 @@ struct Palette {
     pine: Color32,
     birch: Color32,
     rock: Color32,
+    bilberry: Color32,
+    lingonberry: Color32,
+    pile: Color32,
+    fire: Color32,
+    built: Color32,
     strong: Color32,
     weak: Color32,
 }
@@ -368,6 +374,11 @@ impl Palette {
                 pine: Color32::from_rgb(122, 158, 62),
                 birch: Color32::from_rgb(214, 204, 110),
                 rock: Color32::from_rgb(146, 146, 154),
+                bilberry: Color32::from_rgb(96, 116, 214),
+                lingonberry: Color32::from_rgb(214, 84, 96),
+                pile: Color32::from_rgb(196, 164, 118),
+                fire: Color32::from_rgb(255, 150, 40),
+                built: Color32::from_rgb(190, 130, 84),
                 strong,
                 weak,
             }
@@ -380,6 +391,11 @@ impl Palette {
                 pine: Color32::from_rgb(104, 146, 44),
                 birch: Color32::from_rgb(178, 160, 30),
                 rock: Color32::from_rgb(118, 118, 126),
+                bilberry: Color32::from_rgb(52, 70, 168),
+                lingonberry: Color32::from_rgb(176, 40, 56),
+                pile: Color32::from_rgb(140, 104, 56),
+                fire: Color32::from_rgb(226, 104, 0),
+                built: Color32::from_rgb(128, 78, 40),
                 strong,
                 weak,
             }
@@ -391,8 +407,13 @@ impl Palette {
             Kind::Plant(PlantSpecies::Spruce) => self.spruce,
             Kind::Plant(PlantSpecies::Pine) => self.pine,
             Kind::Plant(PlantSpecies::Birch) => self.birch,
+            Kind::Plant(PlantSpecies::Bilberry) => self.bilberry,
+            Kind::Plant(PlantSpecies::Lingonberry) => self.lingonberry,
             Kind::Rock => self.rock,
             Kind::Lake => self.water,
+            Kind::Pile(_) => self.pile,
+            Kind::Structure(StructureKind::Campfire) => self.fire,
+            Kind::Structure(_) => self.built,
         }
     }
 }

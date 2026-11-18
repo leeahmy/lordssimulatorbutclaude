@@ -7,8 +7,9 @@ mod thing;
 use serde::{Deserialize, Serialize};
 
 pub use self::area::{Area, AreaKind};
-pub use self::store::Store;
-pub use self::thing::{Plant, PlantSpecies, Rock, Thing};
+pub use self::store::{Bits, Store};
+pub use self::thing::{Pile, Plant, PlantSpecies, Rock, Structure, StructureKind, Thing};
+use crate::item::Item;
 use crate::space::{Length, Location};
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -44,12 +45,47 @@ pub enum Kind {
     Plant(PlantSpecies),
     Rock,
     Lake,
+    /// A pile of mostly the item.
+    Pile(Item),
+    Structure(StructureKind),
+}
+
+impl Kind {
+    /// Returns what one of the kind is called.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Plant(PlantSpecies::Spruce) => "Spruce",
+            Self::Plant(PlantSpecies::Pine) => "Pine",
+            Self::Plant(PlantSpecies::Birch) => "Birch",
+            Self::Plant(PlantSpecies::Bilberry) => "Bilberry patch",
+            Self::Plant(PlantSpecies::Lingonberry) => "Lingonberry patch",
+            Self::Rock => "Boulder",
+            Self::Lake => "Lake",
+            Self::Pile(item) => item.name(),
+            Self::Structure(StructureKind::Campfire) => "Campfire",
+            Self::Structure(StructureKind::Fireplace) => "Cold fireplace",
+            Self::Structure(StructureKind::LeanTo) => "Lean-to",
+            Self::Structure(StructureKind::Bed) => "Bough bed",
+            Self::Structure(StructureKind::Cabin) => "Log cabin",
+            Self::Structure(StructureKind::Snare) => "Snare",
+            Self::Structure(StructureKind::SprungSnare) => "Sprung snare",
+            Self::Structure(StructureKind::FishTrap) => "Fish trap",
+            Self::Structure(StructureKind::DryingRack) => "Drying rack",
+        }
+    }
+
+    pub const fn is_tree(self) -> bool {
+        matches!(self, Self::Plant(species) if species.is_tree())
+    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct World {
     things: Store<Thing>,
     areas: Vec<Area>,
+    /// The things that are no longer there.
+    #[serde(default)]
+    gone: Bits,
 }
 
 impl World {
@@ -62,12 +98,75 @@ impl World {
         AreaId(self.areas.len() as u32 - 1)
     }
 
+    /// Returns the thing, unless there is no such thing or it is no longer there.
     pub fn thing(&self, id: ThingId) -> Option<&Thing> {
+        if self.gone.has(id.0) {
+            return None;
+        }
         self.things.get(id.0)
     }
 
     pub fn things(&self) -> impl Iterator<Item = (ThingId, &Thing)> {
-        (0..).map(ThingId).zip(self.things.iter())
+        (0..)
+            .map(ThingId)
+            .zip(self.things.iter())
+            .filter(|(id, _)| !self.gone.has(id.0))
+    }
+
+    pub fn plant(&self, id: ThingId) -> Option<&Plant> {
+        match self.thing(id)? {
+            Thing::Plant(plant) => Some(plant),
+            _ => None,
+        }
+    }
+
+    pub fn pile(&self, id: ThingId) -> Option<&Pile> {
+        match self.thing(id)? {
+            Thing::Pile(pile) => Some(pile),
+            _ => None,
+        }
+    }
+
+    pub fn structure(&self, id: ThingId) -> Option<&Structure> {
+        match self.thing(id)? {
+            Thing::Structure(structure) => Some(structure),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn plant_mut(&mut self, id: ThingId) -> Option<&mut Plant> {
+        match self.thing_mut(id)? {
+            Thing::Plant(plant) => Some(plant),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn pile_mut(&mut self, id: ThingId) -> Option<&mut Pile> {
+        match self.thing_mut(id)? {
+            Thing::Pile(pile) => Some(pile),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn structure_mut(&mut self, id: ThingId) -> Option<&mut Structure> {
+        match self.thing_mut(id)? {
+            Thing::Structure(structure) => Some(structure),
+            _ => None,
+        }
+    }
+
+    fn thing_mut(&mut self, id: ThingId) -> Option<&mut Thing> {
+        if self.gone.has(id.0) {
+            return None;
+        }
+        self.things.get_mut(id.0)
+    }
+
+    /// Takes the thing out of the world. Its id is never given to another.
+    pub(crate) fn remove_thing(&mut self, id: ThingId) {
+        if self.things.get(id.0).is_some() {
+            self.gone.mark(id.0);
+        }
     }
 
     pub fn area(&self, id: AreaId) -> Option<&Area> {
@@ -156,6 +255,37 @@ mod tests {
         assert_eq!(world.things().map(|(id, _)| id).collect::<Vec<_>>(), [tree]);
         assert_eq!(world.areas().map(|(id, _)| id).collect::<Vec<_>>(), [water]);
         assert_eq!(World::default().kind(Subject::Thing(tree)), None);
+    }
+
+    #[test]
+    fn thing_taken_out_of_the_world_is_no_longer_found() {
+        let mut world = World::default();
+        let felled = world.add_thing(birch(0, 5_000));
+        let standing = world.add_thing(birch(0, 9_000));
+
+        world.remove_thing(felled);
+
+        assert!(world.thing(felled).is_none());
+        assert!(world.plant_mut(felled).is_none());
+        assert_eq!(world.kind(Subject::Thing(felled)), None);
+        assert_eq!(
+            world.approach(Subject::Thing(felled), Location::default(), REACH),
+            None
+        );
+        assert_eq!(
+            world.things().map(|(id, _)| id).collect::<Vec<_>>(),
+            [standing]
+        );
+        assert_ne!(world.add_thing(birch(0, 5_000)), felled);
+    }
+
+    #[test]
+    fn world_written_before_things_could_go_still_reads() {
+        let old = "(things:[],areas:[])";
+
+        let read: World = ron::from_str(old).expect("the old world decodes");
+
+        assert_eq!(read, World::default());
     }
 
     #[test]

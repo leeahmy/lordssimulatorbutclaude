@@ -1,16 +1,14 @@
 use serde::{Deserialize, Serialize};
 
 use crate::time::Timestamp;
-use crate::world::{AreaId, Store, Subject, ThingId};
-
-const BITS: u32 = u64::BITS;
+use crate::world::{AreaId, Bits, Store, Subject, ThingId};
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Memory {
     /// When each thing was last seen, in the order of their ids.
     things: Store<Option<Timestamp>>,
     /// For each area, the edges of its outline that have been seen.
-    shores: Vec<Marks>,
+    shores: Vec<Bits>,
 }
 
 impl Memory {
@@ -52,45 +50,13 @@ impl Memory {
     pub(crate) fn note_edge(&mut self, area: AreaId, edge: u32) {
         let area = area.index() as usize;
         if self.shores.len() <= area {
-            self.shores.resize_with(area + 1, Marks::default);
+            self.shores.resize_with(area + 1, Bits::default);
         }
         self.shores[area].mark(edge);
     }
 
-    fn shore(&self, area: AreaId) -> Option<&Marks> {
+    fn shore(&self, area: AreaId) -> Option<&Bits> {
         self.shores.get(area.index() as usize)
-    }
-}
-
-/// A set of numbers, kept as a bit for each.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(transparent)]
-struct Marks {
-    words: Store<u64>,
-}
-
-impl Marks {
-    fn is_empty(&self) -> bool {
-        self.words.is_empty()
-    }
-
-    fn has(&self, number: u32) -> bool {
-        self.words
-            .get(number / BITS)
-            .is_some_and(|word| word & (1 << (number % BITS)) != 0)
-    }
-
-    fn mark(&mut self, number: u32) {
-        if self.has(number) {
-            return;
-        }
-
-        while self.words.len() <= (number / BITS) as usize {
-            self.words.push(0);
-        }
-        if let Some(word) = self.words.get_mut(number / BITS) {
-            *word |= 1 << (number % BITS);
-        }
     }
 }
 

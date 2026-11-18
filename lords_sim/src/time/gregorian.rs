@@ -106,6 +106,17 @@ impl Date {
         self.day
     }
 
+    /// Returns which day of its year this date is, counted from 1.
+    pub const fn ordinal(self) -> u16 {
+        let days_before_month = if is_leap_year(self.year) {
+            &DAYS_BEFORE_MONTH_LEAP
+        } else {
+            &DAYS_BEFORE_MONTH_COMMON
+        };
+
+        (days_before_month[self.month as usize - 1] + self.day as u64) as u16
+    }
+
     /// Returns the number of full years from `earlier` to this date, the way an age is counted.
     ///
     /// The anniversary of a 29 February falls on 1 March in common years. If `earlier` is

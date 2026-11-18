@@ -46,6 +46,7 @@ pub enum SceneResponse {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AppAction {
     OpenOptions,
+    OpenHelp,
     ToggleFullscreen,
     Quit,
 }
@@ -93,6 +94,12 @@ pub fn top_panel(ui: &mut egui::Ui, in_game: bool) -> Option<MenuAction> {
                 };
                 if menu_item(ui, label, Some(&TOGGLE_FULLSCREEN)) {
                     action = Some(MenuAction::App(AppAction::ToggleFullscreen));
+                }
+            });
+
+            ui.menu_button("Help", |ui| {
+                if menu_item(ui, "How to Play…", None) {
+                    action = Some(MenuAction::App(AppAction::OpenHelp));
                 }
             });
         });

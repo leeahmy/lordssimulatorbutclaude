@@ -1,6 +1,10 @@
 use egui::RichText;
+use lords_sim::View;
+use lords_sim::body::Body;
+use lords_sim::climate::Conditions;
 use lords_sim::object::Living;
 use lords_sim::time::gregorian::{Date, SECONDS_PER_DAY};
+use lords_sim::world::StructureKind;
 use lords_sim::{Human, Timestamp};
 
 use crate::datetime::DateTimeFormat;
@@ -10,31 +14,140 @@ use crate::scenes::count;
 const PANEL_WIDTH: f32 = 200.0;
 const PANEL_PADDING: f32 = 4.0;
 const FACT_SPACING: egui::Vec2 = egui::vec2(12.0, 6.0);
+const SECTION_SPACING: f32 = 10.0;
 
-pub fn show(ui: &mut egui::Ui, player: &Human, time: Timestamp, format: &DateTimeFormat) {
-    let sex = player.sex();
-    let birth = player.birth();
+/// The level, in hundredths, below which a need is shown as pressing, and as dire.
+const LOW: u32 = 35;
+const DIRE: u32 = 10;
+
+pub fn show(ui: &mut egui::Ui, view: &View, format: &DateTimeFormat) {
+    let player = &view.player;
 
     egui::Panel::left("character_panel")
         .resizable(false)
         .exact_size(PANEL_WIDTH)
         .show(ui, |ui| {
-            ui.add_space(PANEL_PADDING);
-            ui.add(
-                egui::Label::new(RichText::new(player.name().to_string()).heading().strong())
-                    .wrap(),
-            );
-            ui.separator();
-
-            egui::Grid::new("character_facts")
-                .num_columns(2)
-                .spacing(FACT_SPACING)
+            egui::ScrollArea::vertical()
+                .auto_shrink(false)
                 .show(ui, |ui| {
-                    fact(ui, "Sex", format!("{} {sex}", icons::sex(sex)));
-                    fact(ui, "Age", format_age(time, birth));
-                    fact(ui, "Born", format.date(birth));
+                    ui.add_space(PANEL_PADDING);
+                    ui.add(
+                        egui::Label::new(
+                            RichText::new(player.name().to_string()).heading().strong(),
+                        )
+                        .wrap(),
+                    );
+                    ui.separator();
+                    facts(ui, player, view.time, format);
+
+                    ui.add_space(SECTION_SPACING);
+                    ui.separator();
+                    needs(ui, player.body());
+
+                    ui.add_space(SECTION_SPACING);
+                    ui.separator();
+                    weather(ui, view);
                 });
         });
+}
+
+fn facts(ui: &mut egui::Ui, player: &Human, time: Timestamp, format: &DateTimeFormat) {
+    let sex = player.sex();
+    let birth = player.birth();
+
+    egui::Grid::new("character_facts")
+        .num_columns(2)
+        .spacing(FACT_SPACING)
+        .show(ui, |ui| {
+            fact(ui, "Sex", format!("{} {sex}", icons::sex(sex)));
+            fact(ui, "Age", format_age(time, birth));
+            fact(ui, "Born", format.date(birth));
+        });
+}
+
+fn needs(ui: &mut egui::Ui, body: &Body) {
+    need(ui, "Health", body.health_percent(), None);
+    need(ui, "Food", body.energy_percent(), None);
+    need(ui, "Water", body.water_percent(), None);
+    need(ui, "Rest", body.rest_percent(), None);
+    let temperature = format!("{:.1} °C", f64::from(body.temperature().as_tenths()) / 10.0);
+    need(ui, "Warmth", body.warmth_percent(), Some(temperature));
+
+    for ailment in body.ailments() {
+        let color = if ailment.is_grave() {
+            ui.visuals().error_fg_color
+        } else {
+            ui.visuals().warn_fg_color
+        };
+        ui.colored_label(color, ailment.name());
+    }
+}
+
+/// Shows how well one need of the body is met, as a bar that is `percent` full.
+fn need(ui: &mut egui::Ui, name: &str, percent: u32, reading: Option<String>) {
+    let reading = reading.unwrap_or_else(|| format!("{percent}%"));
+    let mut bar = egui::ProgressBar::new(percent as f32 / 100.0)
+        .desired_width(ui.available_width())
+        .text(format!("{name}  {reading}"));
+    if percent < DIRE {
+        bar = bar.fill(ui.visuals().error_fg_color.gamma_multiply(0.6));
+    } else if percent < LOW {
+        bar = bar.fill(ui.visuals().warn_fg_color.gamma_multiply(0.6));
+    }
+
+    ui.add(bar);
+}
+
+fn weather(ui: &mut egui::Ui, view: &View) {
+    let conditions = &view.conditions;
+
+    egui::Grid::new("weather_facts")
+        .num_columns(2)
+        .spacing(FACT_SPACING)
+        .show(ui, |ui| {
+            fact(ui, "Season", conditions.season.name().to_owned());
+            fact(ui, "Sky", sky(conditions));
+            fact(ui, "Wind", conditions.wind.name().to_owned());
+            fact(ui, "Air", conditions.temperature.to_string());
+            fact(ui, "Feels", view.felt.to_string());
+        });
+
+    let at_hand = &view.at_hand;
+    let mut notes = Vec::new();
+    match at_hand.shelter {
+        Some(StructureKind::Cabin) => notes.push("In the cabin"),
+        Some(_) => notes.push("Under the lean-to"),
+        None => {}
+    }
+    let by_the_fire = at_hand.fire_until.map(|until| {
+        let minutes = until.seconds_since(view.time) / 60;
+        if minutes < 60 {
+            format!("By the fire, {minutes} min of wood")
+        } else {
+            format!("By the fire, {} h of wood", minutes / 60)
+        }
+    });
+    if let Some(by_the_fire) = &by_the_fire {
+        notes.push(by_the_fire);
+    }
+    if conditions.snow {
+        notes.push("Snow on the ground");
+    }
+    if conditions.frozen {
+        notes.push("The lake is frozen");
+    }
+    for note in notes {
+        ui.label(RichText::new(note).weak());
+    }
+}
+
+/// Returns the words for what the sky is like, by day or by night.
+fn sky(conditions: &Conditions) -> String {
+    format!(
+        "{}, {}",
+        conditions.sky.name(),
+        conditions.light.name().to_lowercase()
+    )
 }
 
 fn fact(ui: &mut egui::Ui, key: &str, value: String) {

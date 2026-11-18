@@ -3,6 +3,10 @@ use std::iter;
 
 use serde::{Deserialize, Serialize};
 
+use crate::action::Job;
+use crate::body::Body;
+use crate::item::Inventory;
+use crate::skill::Skills;
 use crate::space::{Length, Location};
 use crate::time::Timestamp;
 use crate::world::Subject;
@@ -63,6 +67,12 @@ pub enum Activity {
         toward: Subject,
         destination: Location,
     },
+    /// Doing `job`, of which `done` in-game seconds' worth is done.
+    Doing {
+        job: Job,
+        done: u32,
+    },
+    Sleeping,
 }
 
 #[derive(Default, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -136,6 +146,18 @@ impl Display for Sex {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Human {
     animal: Animal,
+    #[serde(default)]
+    body: Body,
+    #[serde(default)]
+    carried: Inventory,
+    #[serde(default)]
+    skills: Skills,
+    /// What to set about once the walk under way ends.
+    #[serde(default)]
+    intent: Option<Job>,
+    /// The job last left unfinished, and how many in-game seconds' worth of it was done.
+    #[serde(default)]
+    unfinished: Option<(Job, u32)>,
 }
 
 impl Human {
@@ -148,14 +170,75 @@ impl Human {
     /// The ground covered in an in-game second of walking.
     pub const WALKING_SPEED: Length = Length::from_millimeters(1_400);
 
+    /// How many tenths of a degree warmer the clothes everyone has on keep their wearer.
+    const PLAIN_CLOTHES: i32 = 80;
+
     pub fn new(location: Location, time: Timestamp, name: Name, sex: Sex) -> Self {
         Self {
             animal: Animal::new(location, time, name, sex),
+            body: Body::default(),
+            carried: Inventory::default(),
+            skills: Skills::default(),
+            intent: None,
+            unfinished: None,
         }
+    }
+
+    pub fn body(&self) -> &Body {
+        &self.body
+    }
+
+    /// Returns what the human carries, which includes what they wear.
+    pub fn carried(&self) -> &Inventory {
+        &self.carried
+    }
+
+    pub fn skills(&self) -> &Skills {
+        &self.skills
+    }
+
+    /// Returns how many tenths of a degree warmer the human is kept by what they wear.
+    pub fn clothing_warmth(&self) -> i32 {
+        let furs: i32 = self
+            .carried
+            .stacks()
+            .iter()
+            .map(|stack| stack.item.warmth())
+            .sum();
+
+        Self::PLAIN_CLOTHES + furs
     }
 
     pub(crate) fn animal_mut(&mut self) -> &mut Animal {
         &mut self.animal
+    }
+
+    pub(crate) fn body_mut(&mut self) -> &mut Body {
+        &mut self.body
+    }
+
+    pub(crate) fn carried_mut(&mut self) -> &mut Inventory {
+        &mut self.carried
+    }
+
+    pub(crate) fn skills_mut(&mut self) -> &mut Skills {
+        &mut self.skills
+    }
+
+    pub(crate) fn intent(&self) -> Option<Job> {
+        self.intent
+    }
+
+    pub(crate) fn set_intent(&mut self, intent: Option<Job>) {
+        self.intent = intent;
+    }
+
+    pub(crate) fn unfinished(&self) -> Option<(Job, u32)> {
+        self.unfinished
+    }
+
+    pub(crate) fn set_unfinished(&mut self, unfinished: Option<(Job, u32)>) {
+        self.unfinished = unfinished;
     }
 }
 

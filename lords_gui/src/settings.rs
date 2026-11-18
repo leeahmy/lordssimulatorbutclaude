@@ -13,13 +13,15 @@ const UI_SCALE_STEP: f32 = 0.25;
 const MIN_UI_SCALE: f32 = 1.0;
 const MAX_UI_SCALE: f32 = 3.0;
 
-/// The interface scale used until one has been picked for the display.
+/// The interface scale used until the display is known.
 pub const PROVISIONAL_UI_SCALE: f32 = 1.5;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
-    pub ui_scale: Option<f32>,
+    /// The interface scale chosen by the player, or `None` to keep fitting the interface
+    /// to whichever display the window is on.
+    pub interface_scale: Option<f32>,
     pub fullscreen_prompt_seen: bool,
     pub theme: egui::ThemePreference,
     pub datetime: DateTimeFormat,
@@ -30,7 +32,7 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
-            ui_scale: None,
+            interface_scale: None,
             fullscreen_prompt_seen: false,
             theme: egui::ThemePreference::default(),
             datetime: DateTimeFormat::default(),

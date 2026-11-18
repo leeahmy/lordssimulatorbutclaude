@@ -690,7 +690,7 @@ mod tests {
             Sex::Female,
         );
         state.time = Timestamp::from_seconds(63_072_000_000);
-        state
+        state.brought_to_life()
     }
 
     fn fixture_path(state_version: u32) -> PathBuf {
@@ -717,6 +717,20 @@ mod tests {
         assert_eq!(loaded.header.state_version, STATE_VERSION);
         assert_eq!(loaded.header.character, "Ada Maria Mäki Lord");
         assert_eq!(loaded.header.label, "Fixture");
+    }
+
+    /// A save from before there was more to the game than walking loads as the start of
+    /// a life, with everything the player had seen still remembered.
+    #[test]
+    fn save_written_by_version_1_is_brought_to_life() {
+        let loaded = SaveStore::new(FIXTURES)
+            .load(&fixture_path(1))
+            .expect("the save of version 1 loads");
+
+        assert_eq!(loaded.header.state_version, 1);
+        assert_eq!(loaded.state, fixture_state());
+        assert!(loaded.state.player.carried().has(lords_sim::Item::Knife));
+        assert_eq!(loaded.state.started, loaded.state.time);
     }
 
     /// Every fixture ever committed, from whichever version, either loads or is turned

@@ -67,20 +67,22 @@ pub(crate) struct Seen {
     pub(crate) shores: Vec<(AreaId, u32)>,
 }
 
-/// Returns what a perceiver whose eyes are above `eye` sees.
-pub(crate) fn look(world: &World, grid: &Grid, eye: Location) -> Seen {
+/// Returns what a perceiver whose eyes are above `eye` sees, when there is light to see
+/// as far as `limit` by.
+pub(crate) fn look(world: &World, grid: &Grid, eye: Location, limit: Length) -> Seen {
+    let limit = limit.min(SIGHT_LIMIT);
     let mut sightings = Vec::new();
     let mut things = Vec::new();
     let mut shores = Vec::new();
 
-    for id in grid.around(eye, SIGHT_LIMIT) {
+    for id in grid.around(eye, limit) {
         let Some(thing) = world.thing(id) else {
             continue;
         };
         let middle = thing.location();
         let distance = eye.distance_to(middle);
         let width = thing.footprint().as_millimeters() * 2;
-        let made_out = distance <= SIGHT_LIMIT && distance.as_millimeters() <= width * ACUITY;
+        let made_out = distance <= limit && distance.as_millimeters() <= width * ACUITY;
 
         if made_out && is_clear(world, grid, eye, middle, Some(id)) {
             things.push(id);
@@ -100,7 +102,7 @@ pub(crate) fn look(world: &World, grid: &Grid, eye: Location) -> Seen {
             continue;
         };
         let in_view = |point: Location| {
-            eye.distance_to(point) <= SIGHT_LIMIT && is_clear(world, grid, eye, point, None)
+            eye.distance_to(point) <= limit && is_clear(world, grid, eye, point, None)
         };
 
         let mut nearest = None;
@@ -226,7 +228,7 @@ mod tests {
     }
 
     fn seen(world: &World) -> Surroundings {
-        look(world, &Grid::new(world), EYE).surroundings
+        look(world, &Grid::new(world), EYE, SIGHT_LIMIT).surroundings
     }
 
     #[test]
@@ -276,6 +278,22 @@ mod tests {
         assert!(!is_seen(80_000, 60_000, 300));
         assert!(is_seen(80_000, 60_000, 2_000));
         assert!(!is_seen(0, 400_000, 2_000));
+    }
+
+    #[test]
+    fn nothing_is_seen_farther_than_there_is_light_to_see_by() {
+        let mut world = World::default();
+        let near = Subject::Thing(world.add_thing(tree(PlantSpecies::Birch, 0, 8_000)));
+        let far = Subject::Thing(world.add_thing(tree(PlantSpecies::Birch, 9_000, 40_000)));
+        let grid = Grid::new(&world);
+
+        let by_day = look(&world, &grid, EYE, SIGHT_LIMIT);
+        let by_night = look(&world, &grid, EYE, Length::from_meters(12));
+
+        assert!(by_day.surroundings.sighting(far).is_some());
+        assert!(by_night.surroundings.sighting(near).is_some());
+        assert!(by_night.surroundings.sighting(far).is_none());
+        assert_eq!(by_night.things.len(), 1);
     }
 
     #[test]

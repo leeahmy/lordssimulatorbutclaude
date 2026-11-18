@@ -116,7 +116,9 @@ fn run(
         on_publish();
 
         let spent = now.elapsed();
-        if ticked && spent > engine.tick_interval() {
+        let interval = engine.tick_interval();
+        // Ticks shorter than this come several at a time, and are let fall behind quietly.
+        if ticked && interval >= SLEEP_MARGIN && spent > interval {
             warn!(
                 "Tick took {} ms longer than the tick interval",
                 (spent - engine.tick_interval()).as_millis()

@@ -1,5 +1,10 @@
+mod activity;
 mod character;
+mod crafting;
+mod inventory;
+mod journal;
 mod map;
+mod skills;
 mod surroundings;
 mod time_bar;
 
@@ -8,14 +13,18 @@ use std::time::Instant;
 use egui::RichText;
 use lords_runtime::Snapshot;
 use lords_save::SaveKind;
-use lords_sim::{Command, Subject};
+use lords_sim::time::gregorian::{Date, SECONDS_PER_DAY};
+use lords_sim::{Command, Death, Subject, View};
 
+use crate::datetime::DateTimeFormat;
 use crate::playthrough::Playthrough;
+use crate::scenes::count;
 
 use super::{MainMenu, MenuAction, SAVE, Scene, SceneResponse, Shared, top_panel};
 
 const SAVE_DIALOG_WIDTH: f32 = 300.0;
 const SAVE_LABEL_LIMIT: usize = 40;
+const DEATH_DIALOG_WIDTH: f32 = 340.0;
 
 pub struct Overview {
     game: Playthrough,
@@ -23,6 +32,37 @@ pub struct Overview {
     focus_save_dialog: bool,
     map_reach: f32,
     hovered: Option<Subject>,
+    tab: Tab,
+    /// Whether the player has chosen to look around after their character died.
+    death_acknowledged: bool,
+}
+
+/// What the middle of the overview shows.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+enum Tab {
+    #[default]
+    Surroundings,
+    Inventory,
+    Crafting,
+    Skills,
+}
+
+impl Tab {
+    const ALL: [Self; 4] = [
+        Self::Surroundings,
+        Self::Inventory,
+        Self::Crafting,
+        Self::Skills,
+    ];
+
+    fn title(self) -> &'static str {
+        match self {
+            Self::Surroundings => "Surroundings",
+            Self::Inventory => "Inventory",
+            Self::Crafting => "Crafting",
+            Self::Skills => "Skills",
+        }
+    }
 }
 
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -39,6 +79,8 @@ impl Overview {
             focus_save_dialog: false,
             map_reach: map::DEFAULT_REACH,
             hovered: None,
+            tab: Tab::default(),
+            death_acknowledged: false,
         }
     }
 }
@@ -58,12 +100,20 @@ impl Scene for Overview {
         let format = &shared.settings.datetime;
         time_bar::show(ui, runtime, &snapshot, format, keyboard_free);
         let mut leave = !runtime.is_running() && stopped_banner(ui);
-        character::show(ui, &view.player, view.time, format);
+        character::show(ui, view, format);
+        journal::show(ui, view, format);
         let on_map = map::show(ui, view, &mut self.map_reach, self.hovered);
-        let in_list = surroundings::show(ui, view, self.hovered);
+        let in_list = central(ui, view, &mut self.tab, self.hovered);
         self.hovered = on_map.hovered.or(in_list.hovered);
         if let Some(command) = on_map.command.or(in_list.command) {
             runtime.send(command);
+        }
+        if let Some(death) = view.death.filter(|_| !self.death_acknowledged) {
+            match death_dialog(ui, view, death, format) {
+                Some(AfterDeath::Leave) => leave = true,
+                Some(AfterDeath::Stay) => self.death_acknowledged = true,
+                None => {}
+            }
         }
 
         let interval = shared.settings.autosave_interval();
@@ -159,6 +209,89 @@ impl Overview {
             self.save_dialog = Some(label);
         }
     }
+}
+
+/// Shows the middle of the overview: what the player character is doing, and under it
+/// the tab chosen.
+fn central(ui: &mut egui::Ui, view: &View, tab: &mut Tab, hovered: Option<Subject>) -> Pointed {
+    let mut pointed = Pointed::default();
+
+    egui::CentralPanel::default().show(ui, |ui| {
+        let asked = activity::show(ui, view);
+
+        ui.horizontal(|ui| {
+            for choice in Tab::ALL {
+                ui.selectable_value(tab, choice, choice.title());
+            }
+        });
+        ui.separator();
+
+        egui::ScrollArea::vertical()
+            .auto_shrink(false)
+            .show(ui, |ui| match tab {
+                Tab::Surroundings => pointed = surroundings::show(ui, view, hovered),
+                Tab::Inventory => pointed.command = inventory::show(ui, view),
+                Tab::Crafting => pointed.command = crafting::show(ui, view),
+                Tab::Skills => skills::show(ui, view),
+            });
+        pointed.command = asked.or(pointed.command.take());
+    });
+
+    pointed
+}
+
+/// What the player chose to do once their character had died.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AfterDeath {
+    Leave,
+    Stay,
+}
+
+fn death_dialog(
+    ui: &mut egui::Ui,
+    view: &View,
+    death: Death,
+    format: &DateTimeFormat,
+) -> Option<AfterDeath> {
+    let mut choice = None;
+
+    let modal = egui::Modal::new(egui::Id::unique("death_dialog")).show(ui.ctx(), |ui| {
+        ui.set_width(DEATH_DIALOG_WIDTH);
+        ui.heading("Your life has ended");
+        ui.add_space(4.0);
+        ui.label(epitaph(view, death, format));
+        ui.add_space(8.0);
+
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if ui.button("Main Menu").clicked() {
+                choice = Some(AfterDeath::Leave);
+            }
+            if ui.button("Look around").clicked() {
+                choice = Some(AfterDeath::Stay);
+            }
+        });
+    });
+
+    choice.or(modal.should_close().then_some(AfterDeath::Stay))
+}
+
+/// Returns the words for how a life went and how it ended.
+fn epitaph(view: &View, death: Death, format: &DateTimeFormat) -> String {
+    use lords_sim::object::Living;
+
+    let player = &view.player;
+    let age = Date::from(death.time).years_since(Date::from(player.birth()));
+    let days = death.time.seconds_since(view.started) / SECONDS_PER_DAY;
+    let walked = view.walked.as_millimeters() / 1_000_000;
+
+    format!(
+        "{} died of {} on {}, at the age of {age}, after {} in the forest and {} on foot.",
+        player.name(),
+        death.cause.name(),
+        format.date(death.time),
+        count(days, "day"),
+        count(walked as u64, "kilometer"),
+    )
 }
 
 fn stopped_banner(ui: &mut egui::Ui) -> bool {

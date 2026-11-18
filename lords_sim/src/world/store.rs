@@ -112,6 +112,39 @@ impl<'de, T: Deserialize<'de> + Clone> Deserialize<'de> for Store<T> {
     }
 }
 
+/// A set of numbers, kept as a bit for each, whose clones share what they hold until one
+/// of them changes.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct Bits {
+    words: Store<u64>,
+}
+
+impl Bits {
+    pub fn is_empty(&self) -> bool {
+        self.words.is_empty()
+    }
+
+    pub fn has(&self, number: u32) -> bool {
+        self.words
+            .get(number / u64::BITS)
+            .is_some_and(|word| word & (1 << (number % u64::BITS)) != 0)
+    }
+
+    pub fn mark(&mut self, number: u32) {
+        if self.has(number) {
+            return;
+        }
+
+        while self.words.len() <= (number / u64::BITS) as usize {
+            self.words.push(0);
+        }
+        if let Some(word) = self.words.get_mut(number / u64::BITS) {
+            *word |= 1 << (number % u64::BITS);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -1,5 +1,12 @@
+mod life;
+
 use std::sync::Arc;
 
+use crate::action::{AtHand, Job, Verb};
+use crate::climate::Conditions;
+use crate::craft::Recipe;
+use crate::item::{HEAVY_LOAD, Item};
+use crate::journal::{Entry, Tone};
 use crate::map::{self, Map, Surface};
 use crate::object::{Activity, Human, Living, Name, Sex};
 use crate::perception::{self, Surroundings};
@@ -7,9 +14,20 @@ use crate::route;
 use crate::space::{Length, Location};
 use crate::state::State;
 use crate::time::{TICKS_PER_SECOND, Timestamp};
-use crate::view::{View, Walk};
+use crate::view::{View, Walk, Work};
 use crate::world::index::Grid;
-use crate::world::{Area, AreaKind, Subject, ThingId, World};
+use crate::world::{Area, AreaKind, StructureKind, Subject, Thing, ThingId, World};
+
+/// How far a fire lights up the night.
+const FIRELIGHT: Length = Length::from_meters(30);
+
+/// How far from a fire its light still falls on someone.
+const FIRESIDE: Length = Length::from_meters(5);
+
+/// How fast someone walks through snow and under a heavy load, in hundredths of how fast
+/// they walk otherwise.
+const SNOW_PACE: i64 = 80;
+const LOADED_PACE: i64 = 75;
 
 pub struct Simulation {
     state: State,
@@ -20,6 +38,17 @@ pub struct Simulation {
     map: Arc<Map>,
     in_sight: Vec<ThingId>,
     route: Vec<Location>,
+    /// What the sky and the air were like when last looked at, which is every minute.
+    conditions: Conditions,
+    at_hand: Arc<AtHand>,
+    /// The journal of the state as it is shown.
+    journal: Arc<[Entry]>,
+    /// The piles and the structures of the world, which change with time.
+    kept: Vec<ThingId>,
+    /// Whether what the player perceives may have changed since they last looked.
+    stale: bool,
+    /// Whether something has happened that the player should not miss.
+    alert: bool,
 }
 
 impl Simulation {
@@ -28,19 +57,25 @@ impl Simulation {
         Self::from_state(State::new(name, sex))
     }
 
-    /// Returns a simulation of a player in the world that [`World::generate`] makes of `seed`.
+    /// Returns a simulation of a player setting out on a life in the world that
+    /// [`World::generate`] makes of `seed`.
     pub fn generate(name: Name, sex: Sex, seed: u64) -> Self {
-        Self::from_state(State {
-            world: World::generate(seed),
-            ..State::new(name, sex)
-        })
+        Self::from_state(State::generate(name, sex, seed))
     }
 
     pub fn from_state(state: State) -> Self {
         let grid = Grid::new(&state.world);
         let surfaces = state.world.areas().map(|_| Surface::default()).collect();
+        let kept = state
+            .world
+            .things()
+            .filter(|(_, thing)| matches!(thing, Thing::Pile(_) | Thing::Structure(_)))
+            .map(|(id, _)| id)
+            .collect();
 
         let mut simulation = Self {
+            conditions: state.climate.conditions(state.time),
+            journal: state.journal.entries().into(),
             state,
             grid,
             surfaces,
@@ -48,6 +83,10 @@ impl Simulation {
             map: Arc::default(),
             in_sight: Vec::new(),
             route: Vec::new(),
+            at_hand: Arc::default(),
+            kept,
+            stale: false,
+            alert: false,
         };
         simulation.look();
         simulation
@@ -58,9 +97,18 @@ impl Simulation {
         &self.state
     }
 
+    /// Returns whether something has happened since this was last asked that the player
+    /// should not miss, such as their life being in danger.
+    pub fn take_alert(&mut self) -> bool {
+        std::mem::take(&mut self.alert)
+    }
+
     pub fn view(&self) -> View {
         let player = &self.state.player;
-        let walk = player.activity().and_then(|activity| match activity {
+        let world = &self.state.world;
+        let activity = player.activity();
+
+        let walk = activity.and_then(|activity| match activity {
             Activity::Walking {
                 toward,
                 destination,
@@ -73,13 +121,28 @@ impl Simulation {
                 }
 
                 Some(Walk {
-                    toward: self.state.world.kind(toward)?,
+                    toward: world.kind(toward)?,
                     destination,
                     via: self.route.clone(),
                     remaining,
+                    intent: player.intent(),
                 })
             }
+            Activity::Doing { .. } | Activity::Sleeping => None,
         });
+        let work = activity.and_then(|activity| match activity {
+            Activity::Doing { job, done } => Some(Work {
+                job,
+                subject: match job {
+                    Job::Act { subject, .. } => world.kind(subject),
+                    Job::Craft(_) | Job::Consume(_) | Job::EatSnow => None,
+                },
+                done,
+                needed: self.needed(job),
+            }),
+            Activity::Walking { .. } | Activity::Sleeping => None,
+        });
+        let effort = self.effort();
 
         View {
             time: self.state.time,
@@ -87,28 +150,65 @@ impl Simulation {
             surroundings: Arc::clone(&self.surroundings),
             map: Arc::clone(&self.map),
             walk,
+            work,
+            sleeping: activity == Some(Activity::Sleeping),
+            conditions: self.conditions,
+            felt: self.felt().warmer_by(effort.warmth()),
+            at_hand: Arc::clone(&self.at_hand),
+            journal: Arc::clone(&self.journal),
+            started: self.state.started,
+            walked: Length::from_millimeters(self.state.walked as i64),
+            death: self.state.death,
         }
     }
 
-    /// Advances the simulation by one tick.
+    /// Advances the simulation by one tick. Nothing moves on once the player has died.
     pub fn tick(&mut self) {
+        if self.state.death.is_some() {
+            return;
+        }
+
         self.state.time.advance();
-        self.walk();
+        match self.state.player.activity() {
+            Some(Activity::Walking { .. }) => self.walk(),
+            Some(Activity::Doing { .. }) => self.work(),
+            Some(Activity::Sleeping) | None => {}
+        }
+        if self.state.time.as_seconds().is_multiple_of(60) {
+            self.pass_minute();
+        }
+        if self.stale {
+            self.look();
+        }
     }
 
     /// Applies a change requested from outside the simulation.
     pub fn apply(&mut self, command: Command) {
+        if self.state.death.is_some() {
+            return;
+        }
+
         match command {
             Command::Reset => self.state.time = Timestamp::EPOCH,
-            Command::WalkTo(subject) => self.walk_to(subject),
-            Command::Stop => {
-                self.state.player.animal_mut().set_activity(None);
-                self.route.clear();
+            Command::WalkTo(subject) => {
+                self.set_aside();
+                self.walk_to(subject, None);
             }
+            Command::Stop => self.set_aside(),
+            Command::Act { verb, subject } => self.take_up(Job::Act { verb, subject }),
+            Command::Craft(recipe) => self.take_up(Job::Craft(recipe)),
+            Command::Consume(item) => self.take_up(Job::Consume(item)),
+            Command::EatSnow => self.take_up(Job::EatSnow),
+            Command::Sleep => self.lie_down(),
+            Command::Drop(item, count) => self.drop(item, count),
+        }
+        if self.stale {
+            self.look();
         }
     }
 
-    fn walk_to(&mut self, subject: Subject) {
+    /// Sends the player walking to `subject`, to set about `intent` once there.
+    fn walk_to(&mut self, subject: Subject, intent: Option<Job>) {
         if !self.state.memory.knows(subject) {
             return;
         }
@@ -123,6 +223,7 @@ impl Simulation {
             });
 
         self.state.player.animal_mut().set_activity(activity);
+        self.state.player.set_intent(activity.and(intent));
         self.plan_route();
     }
 
@@ -132,7 +233,7 @@ impl Simulation {
         };
         let start = self.state.player.location();
         let mut at = start;
-        let mut left = Human::WALKING_SPEED / TICKS_PER_SECOND as i64;
+        let mut left = self.stride();
         let mut learned = false;
 
         while left > Length::ZERO {
@@ -168,9 +269,28 @@ impl Simulation {
         }
 
         if at != start || learned {
+            self.state.walked += start.distance_to(at).as_millimeters() as u64;
             self.state.player.animal_mut().move_to(at);
             self.look();
         }
+        if self.state.player.activity().is_none() {
+            self.arrive();
+        }
+    }
+
+    /// Returns the ground the player covers in a tick of walking.
+    fn stride(&self) -> Length {
+        let player = &self.state.player;
+        let mut stride = Human::WALKING_SPEED / TICKS_PER_SECOND as i64;
+
+        stride = stride * i64::from(player.body().pace_percent()) / 100;
+        if self.conditions.snow {
+            stride = stride * SNOW_PACE / 100;
+        }
+        if player.carried().weight() > HEAVY_LOAD {
+            stride = stride * LOADED_PACE / 100;
+        }
+        stride
     }
 
     fn plan_route(&mut self) {
@@ -195,14 +315,17 @@ impl Simulation {
 
     /// Takes in what the player sees from where they are, and commits it to memory.
     fn look(&mut self) {
+        self.stale = false;
+        let sight = self.sight();
         let State {
             player,
             world,
             memory,
             time,
+            ..
         } = &mut self.state;
         let eye = player.location();
-        let seen = perception::look(world, &self.grid, eye);
+        let seen = perception::look(world, &self.grid, eye, sight);
 
         for thing in self.in_sight.iter().chain(&seen.things) {
             memory.note_thing(*thing, *time);
@@ -223,12 +346,73 @@ impl Simulation {
             &seen,
             eye,
         ));
+        self.at_hand = Arc::new(at_hand(world, &seen.surroundings));
         self.surroundings = Arc::new(seen.surroundings);
         self.in_sight = seen.things;
         if shore_learned {
             self.plan_route();
         }
     }
+
+    /// Returns how far the player sees in the light there is.
+    fn sight(&self) -> Length {
+        let by_daylight = self.conditions.light.sight();
+        if by_daylight >= FIRELIGHT {
+            return by_daylight;
+        }
+
+        let eye = self.state.player.location();
+        let by_a_fire = self.kept.iter().any(|id| {
+            self.state.world.structure(*id).is_some_and(|structure| {
+                structure.kind() == StructureKind::Campfire
+                    && eye.distance_to(structure.location()) <= FIRESIDE
+            })
+        });
+
+        if by_a_fire { FIRELIGHT } else { by_daylight }
+    }
+
+    /// Writes in the journal.
+    fn note(&mut self, tone: Tone, text: impl Into<String>) {
+        self.state.journal.write(self.state.time, tone, text.into());
+        self.journal = self.state.journal.entries().into();
+    }
+}
+
+/// Returns what is within reach of someone whose surroundings are `surroundings`.
+fn at_hand(world: &World, surroundings: &Surroundings) -> AtHand {
+    let mut at_hand = AtHand::default();
+
+    for sighting in &surroundings.within_reach {
+        let id = match sighting.subject {
+            Subject::Thing(id) => id,
+            Subject::Area(_) => {
+                at_hand.water = true;
+                continue;
+            }
+        };
+
+        match world.thing(id) {
+            Some(Thing::Pile(pile)) => {
+                for stack in pile.items().stacks() {
+                    at_hand.loose.add_stack(*stack);
+                }
+                at_hand.piles.push(id);
+            }
+            Some(Thing::Structure(structure)) => match structure.kind() {
+                StructureKind::Campfire => {
+                    at_hand.fire = true;
+                    at_hand.fire_until = at_hand.fire_until.max(Some(structure.until()));
+                }
+                StructureKind::Bed => at_hand.bed = true,
+                kind if kind.is_shelter() => at_hand.shelter = at_hand.shelter.max(Some(kind)),
+                _ => {}
+            },
+            Some(Thing::Plant(_) | Thing::Rock(_)) | None => {}
+        }
+    }
+
+    at_hand
 }
 
 /// A change to the simulation requested from outside it, such as by the player.
@@ -238,8 +422,21 @@ pub enum Command {
     Reset,
     /// Sends the player walking to something they know of until it is within reach.
     WalkTo(Subject),
-    /// Stops the player's current action.
+    /// Stops the player's current action, or wakes them up.
     Stop,
+    /// Has the player do something to a subject they know of, walking to it first if it
+    /// is out of reach.
+    Act { verb: Verb, subject: Subject },
+    /// Has the player make something of what they carry and what lies within reach.
+    Craft(Recipe),
+    /// Has the player eat or drink one of an item they carry.
+    Consume(Item),
+    /// Has the player eat snow off the ground for the water in it.
+    EatSnow,
+    /// Has the player lie down to sleep where they are.
+    Sleep,
+    /// Has the player put down some of what they carry.
+    Drop(Item, u32),
 }
 
 #[cfg(test)]
@@ -247,7 +444,7 @@ mod tests {
     use super::*;
     use crate::map::Mark;
     use crate::object::Object;
-    use crate::world::{Kind, Plant, PlantSpecies, Rock, Thing};
+    use crate::world::{Kind, Plant, PlantSpecies, Rock};
 
     fn birch(x: i64, y: i64) -> Thing {
         Thing::Plant(Plant::new(
@@ -387,6 +584,7 @@ mod tests {
                 destination: Location::new(0, 19_450),
                 via: Vec::new(),
                 remaining: Length::from_millimeters(19_450),
+                intent: None,
             })
         );
 

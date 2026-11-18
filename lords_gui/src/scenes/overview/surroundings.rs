@@ -1,54 +1,45 @@
 use egui::RichText;
 use lords_sim::perception::Sighting;
-use lords_sim::view::Walk;
-use lords_sim::world::{Kind, PlantSpecies};
-use lords_sim::{Bearing, Command, Length, Subject, View};
+use lords_sim::world::Kind;
+use lords_sim::{Bearing, Command, Length, Subject, Verb, View};
 
 use super::Pointed;
 
-const ROW_SPACING: egui::Vec2 = egui::vec2(16.0, 6.0);
+const ROW_SPACING: egui::Vec2 = egui::vec2(12.0, 6.0);
 const SECTION_SPACING: f32 = 12.0;
 
-const COLUMN_WIDTH: f32 = 90.0;
+const COLUMN_WIDTH: f32 = 56.0;
 
 /// How many rows of a section show at most without scrolling.
 const ROWS_SHOWN: f32 = 5.0;
 
+/// Lists what the player perceives around them, with what there is to do to each.
 pub fn show(ui: &mut egui::Ui, view: &View, highlighted: Option<Subject>) -> Pointed {
     let mut pointed = Pointed::default();
     let highlighted = highlighted.and_then(|subject| row_of(view, subject));
 
-    egui::CentralPanel::default().show(ui, |ui| {
-        egui::ScrollArea::vertical()
-            .auto_shrink(false)
-            .show(ui, |ui| {
-                if activity(ui, view.walk.as_ref()) {
-                    pointed.command = Some(Command::Stop);
-                }
+    let surroundings = &view.surroundings;
+    for category in Category::ALL {
+        let reachable = surroundings.within_reach.iter();
+        let farther = surroundings.nearby.iter().chain(&surroundings.in_sight);
+        let rows: Vec<Row<'_>> = reachable
+            .map(|sighting| (sighting, true))
+            .chain(farther.map(|sighting| (sighting, false)))
+            .filter(|(sighting, _)| Category::of(sighting.kind) == category)
+            .map(|(sighting, within_reach)| Row {
+                sighting,
+                within_reach,
+                highlighted: highlighted == Some(sighting.subject),
+            })
+            .collect();
+        if rows.is_empty() && !category.is_always_listed() {
+            continue;
+        }
 
-                let surroundings = &view.surroundings;
-                for category in Category::ALL {
-                    let reachable = surroundings.within_reach.iter();
-                    let farther = surroundings.nearby.iter().chain(&surroundings.in_sight);
-                    let rows: Vec<Row<'_>> = reachable
-                        .map(|sighting| (sighting, true))
-                        .chain(farther.map(|sighting| (sighting, false)))
-                        .filter(|(sighting, _)| Category::of(sighting.kind) == category)
-                        .map(|(sighting, within_reach)| Row {
-                            sighting,
-                            within_reach,
-                            highlighted: highlighted == Some(sighting.subject),
-                        })
-                        .collect();
-
-                    let section = section(ui, category, &rows);
-                    if let Some(subject) = section.chosen {
-                        pointed.command = Some(Command::WalkTo(subject));
-                    }
-                    pointed.hovered = pointed.hovered.or(section.hovered);
-                }
-            });
-    });
+        let section = section(ui, category, &rows);
+        pointed.command = pointed.command.or(section.chosen);
+        pointed.hovered = pointed.hovered.or(section.hovered);
+    }
 
     pointed
 }
@@ -73,28 +64,49 @@ fn row_of(view: &View, subject: Subject) -> Option<Subject> {
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 enum Category {
+    Camp,
+    Ground,
     Trees,
+    Berries,
     Rocks,
     Water,
 }
 
 impl Category {
-    const ALL: [Self; 3] = [Self::Trees, Self::Rocks, Self::Water];
+    const ALL: [Self; 6] = [
+        Self::Camp,
+        Self::Ground,
+        Self::Trees,
+        Self::Berries,
+        Self::Rocks,
+        Self::Water,
+    ];
 
     fn of(kind: Kind) -> Self {
         match kind {
-            Kind::Plant(_) => Self::Trees,
+            Kind::Plant(species) if species.is_tree() => Self::Trees,
+            Kind::Plant(_) => Self::Berries,
             Kind::Rock => Self::Rocks,
             Kind::Lake => Self::Water,
+            Kind::Pile(_) => Self::Ground,
+            Kind::Structure(_) => Self::Camp,
         }
     }
 
     fn title(self) -> &'static str {
         match self {
+            Self::Camp => "Camp",
+            Self::Ground => "On the ground",
             Self::Trees => "Trees",
+            Self::Berries => "Berries",
             Self::Rocks => "Rocks",
             Self::Water => "Water",
         }
+    }
+
+    /// Returns whether the category is listed even when nothing of it is in sight.
+    fn is_always_listed(self) -> bool {
+        matches!(self, Self::Trees | Self::Rocks | Self::Water)
     }
 }
 
@@ -106,32 +118,8 @@ struct Row<'a> {
 
 #[derive(Default)]
 struct Section {
-    chosen: Option<Subject>,
+    chosen: Option<Command>,
     hovered: Option<Subject>,
-}
-
-fn activity(ui: &mut egui::Ui, walk: Option<&Walk>) -> bool {
-    let mut stop = false;
-
-    ui.horizontal(|ui| {
-        ui.set_min_height(ui.spacing().interact_size.y);
-        match walk {
-            Some(walk) => {
-                ui.label(format!(
-                    "Walking to the {}, {} to go",
-                    name(walk.toward).to_lowercase(),
-                    distance(walk.remaining)
-                ));
-                stop = ui.button("Stop").clicked();
-            }
-            None => {
-                ui.label(RichText::new("Standing still").weak());
-            }
-        }
-    });
-    ui.add_space(SECTION_SPACING);
-
-    stop
 }
 
 fn section(ui: &mut egui::Ui, category: Category, rows: &[Row<'_>]) -> Section {
@@ -168,16 +156,15 @@ fn section(ui: &mut egui::Ui, category: Category, rows: &[Row<'_>]) -> Section {
                             label
                         });
                         shown |= ui.label(RichText::new(compass_point(sighting.bearing)).weak());
-                        if row.within_reach {
-                            shown |= ui.label(RichText::new("within reach").weak());
+                        shown |= if row.within_reach {
+                            ui.label(RichText::new("within reach").weak())
                         } else {
-                            shown |= ui.label(RichText::new(distance_to(sighting)).weak());
-                            let walk = ui.button("Walk to");
-                            if walk.clicked() {
-                                section.chosen = Some(sighting.subject);
-                            }
-                            shown |= walk;
-                        }
+                            ui.label(RichText::new(distance_to(sighting)).weak())
+                        };
+                        let buttons = ui.horizontal(|ui| actions(ui, row));
+                        shown |= buttons.response;
+                        section.chosen = section.chosen.take().or(buttons.inner);
+
                         if ui.rect_contains_pointer(shown.rect) {
                             section.hovered = Some(sighting.subject);
                         }
@@ -190,6 +177,43 @@ fn section(ui: &mut egui::Ui, category: Category, rows: &[Row<'_>]) -> Section {
     section
 }
 
+/// Shows the buttons for what there is to do to what `row` is of, and returns what was
+/// chosen to be done.
+fn actions(ui: &mut egui::Ui, row: &Row<'_>) -> Option<Command> {
+    let Sighting { subject, kind, .. } = *row.sighting;
+    let mut chosen = None;
+
+    if !row.within_reach && ui.button("Walk to").clicked() {
+        chosen = Some(Command::WalkTo(subject));
+    }
+    match Verb::for_kind(kind) {
+        [] => {}
+        [verb] => {
+            if ui.button(verb.name(kind)).clicked() {
+                chosen = Some(Command::Act {
+                    verb: *verb,
+                    subject,
+                });
+            }
+        }
+        verbs => {
+            ui.menu_button("Do…", |ui| {
+                for verb in verbs {
+                    if ui.button(verb.name(kind)).clicked() {
+                        chosen = Some(Command::Act {
+                            verb: *verb,
+                            subject,
+                        });
+                        ui.close();
+                    }
+                }
+            });
+        }
+    }
+
+    chosen
+}
+
 fn label(sighting: &Sighting) -> String {
     let name = name(sighting.kind);
     if sighting.count > 1 {
@@ -200,13 +224,7 @@ fn label(sighting: &Sighting) -> String {
 }
 
 pub(super) fn name(kind: Kind) -> &'static str {
-    match kind {
-        Kind::Plant(PlantSpecies::Spruce) => "Spruce",
-        Kind::Plant(PlantSpecies::Pine) => "Pine",
-        Kind::Plant(PlantSpecies::Birch) => "Birch",
-        Kind::Rock => "Boulder",
-        Kind::Lake => "Lake",
-    }
+    kind.name()
 }
 
 fn distance_to(sighting: &Sighting) -> String {
@@ -250,7 +268,7 @@ fn compass_point(bearing: Bearing) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use lords_sim::world::{Area, AreaKind};
+    use lords_sim::world::{Area, AreaKind, PlantSpecies};
     use lords_sim::{Name, Sex, Simulation, World};
 
     use super::*;

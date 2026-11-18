@@ -12,7 +12,8 @@ pub struct Speed(u32);
 impl Speed {
     pub const BASE: Self = Self(1);
 
-    pub const MAX: Self = Self(100);
+    /// An in-game hour in a second.
+    pub const MAX: Self = Self(3_600);
 
     /// Returns the speed `multiplier` times the base time, clamped to between
     /// [`Self::BASE`] and [`Self::MAX`].

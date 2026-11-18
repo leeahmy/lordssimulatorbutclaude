@@ -7,7 +7,8 @@ const CELL: i64 = 10_000;
 
 /// Finds the things of a [`World`] by where they are.
 ///
-/// It is worked out from the world, and has to be made again when a thing is added or moved.
+/// It is worked out from the world, and has to be told of every thing added since. Things
+/// do not move, and those taken out of the world are still found here.
 pub(crate) struct Grid {
     cells: HashMap<(i64, i64), Vec<ThingId>>,
     widest_footprint: i64,
@@ -27,6 +28,12 @@ impl Grid {
             cells,
             widest_footprint,
         }
+    }
+
+    /// Takes note of a thing added to the world since the grid was made.
+    pub(crate) fn insert(&mut self, id: ThingId, location: Location, footprint: Length) {
+        self.cells.entry(cell_of(location)).or_default().push(id);
+        self.widest_footprint = self.widest_footprint.max(footprint.as_millimeters());
     }
 
     pub(crate) fn around(

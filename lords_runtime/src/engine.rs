@@ -53,13 +53,19 @@ impl Engine {
         }
     }
 
-    /// Runs the tick that is due at `now`, if there is one, and returns whether it did.
+    /// Runs the ticks that are due at `now`, if there are any, and returns whether it did.
+    ///
+    /// The clock is paused if something happens in them that the player should not miss.
     pub(crate) fn advance(&mut self, now: Instant) -> bool {
-        let due = self.clock.take_due_tick(now);
-        if due {
+        let due = self.clock.take_due_ticks(now);
+        for _ in 0..due {
             self.sim.tick();
+            if self.sim.take_alert() {
+                self.clock.pause();
+                break;
+            }
         }
-        due
+        due > 0
     }
 
     /// Returns the moment the next tick is due, or `None` while paused.
@@ -100,12 +106,8 @@ mod tests {
         )
     }
 
-    fn after_ticks(ticks: u32) -> Timestamp {
-        let mut time = Timestamp::EPOCH;
-        for _ in 0..ticks {
-            time.advance();
-        }
-        time
+    fn after_ticks(ticks: u64) -> Timestamp {
+        Timestamp::from_seconds(ticks / lords_sim::time::TICKS_PER_SECOND)
     }
 
     #[test]
@@ -118,6 +120,35 @@ mod tests {
         assert!(engine.advance(start + INTERVAL * 2));
 
         assert_eq!(engine.snapshot().view.time, after_ticks(2));
+    }
+
+    #[test]
+    fn ticks_missed_are_made_up_for() {
+        let start = Instant::now();
+        let mut engine = engine(start);
+
+        assert!(engine.advance(start + INTERVAL * 3));
+
+        assert_eq!(engine.snapshot().view.time, after_ticks(3));
+    }
+
+    #[test]
+    fn clock_is_paused_when_the_player_must_not_miss_what_happens() {
+        let start = Instant::now();
+        let mut engine = engine(start);
+        let mut now = start;
+
+        // Left alone, the player is parched within two days, which is not to be missed.
+        while !engine.snapshot().paused {
+            now += INTERVAL * 60;
+            engine.advance(now);
+            assert!(engine.snapshot().view.time < after_ticks(2 * 86_400));
+        }
+
+        let parched = lords_sim::body::Ailment::Parched;
+        let view = engine.snapshot().view;
+        assert!(view.player.body().ailments().contains(&parched));
+        assert!(!engine.advance(now + INTERVAL * 60));
     }
 
     #[test]

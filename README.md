@@ -6,6 +6,26 @@ GUI-based life simulator built with Rust, focusing on realism and limitless poss
 
 Runs on Linux, Windows, and macOS.
 
+## The game
+
+You are alone in a northern forest by a lake, with a knife, a fire steel, and a little bread.
+It is the first of May, and nothing is asked of you but to live.
+
+- **A body to keep alive.** Hunger, thirst, tiredness, body heat, sickness, and health all
+  follow from what you do and where you are. Hunger kills in weeks, thirst in days, the cold
+  in hours.
+- **A sky that turns.** Seasons, weather, and daylight follow the calendar of a place far in
+  the north: bright summer nights, a few hours of winter sun, snow on the ground, ice on the
+  lake.
+- **A forest to live off.** Gather sticks, boughs, bark, roots, and stones, pick berries in
+  their season, fell trees, fish, and set snares and fish traps.
+- **Things to make.** Cordage, an axe, a fishing rod, pots, fur clothes, a campfire, a
+  lean-to, a drying rack, and in the end a log cabin, all from what the forest gives.
+- **Skills that grow** with use, a journal of what has happened, and saves that carry on from
+  where you left.
+
+*Help → How to Play* in the game tells the rest.
+
 ## Download
 
 Packages for all three systems are attached to each

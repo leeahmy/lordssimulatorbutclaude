@@ -110,17 +110,27 @@ fn section(ui: &mut egui::Ui, title: &str) {
 }
 
 fn ui_scale(ui: &mut egui::Ui, settings: &mut Settings) {
-    let mut scale = settings.ui_scale.unwrap_or_else(|| ui.ctx().zoom_factor());
+    let fitted = ui.ctx().zoom_factor();
+    let choices = std::iter::once(None).chain(settings::ui_scale_choices().map(Some));
 
-    if choice(
+    let changed = choice(
         ui,
         "ui_scale",
-        &mut scale,
-        settings::ui_scale_choices(),
-        |v| format!("{:.0} %", v * 100.0),
-    ) {
-        settings.ui_scale = Some(scale);
+        &mut settings.interface_scale,
+        choices,
+        |scale| ui_scale_label(scale, fitted),
+    );
+    if changed && let Some(scale) = settings.interface_scale {
         ui.ctx().set_zoom_factor(scale);
+    }
+}
+
+/// Returns the words for a choice of interface scale, `None` being to fit the display,
+/// which at present comes to `fitted`.
+fn ui_scale_label(scale: Option<f32>, fitted: f32) -> String {
+    match scale {
+        Some(scale) => format!("{:.0} %", scale * 100.0),
+        None => format!("Fit the display ({:.0} %)", fitted * 100.0),
     }
 }
 
@@ -233,6 +243,13 @@ mod tests {
             vec![escape(true), escape(false)]
         ));
         assert_eq!(settings, Settings::default());
+    }
+
+    #[test]
+    fn interface_scale_is_fitted_to_the_display_unless_one_is_chosen() {
+        assert_eq!(Settings::default().interface_scale, None);
+        assert_eq!(ui_scale_label(None, 1.75), "Fit the display (175 %)");
+        assert_eq!(ui_scale_label(Some(2.5), 1.75), "250 %");
     }
 
     #[test]

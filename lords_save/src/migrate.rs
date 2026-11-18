@@ -8,7 +8,7 @@ use crate::error::SaveError;
 use crate::format::SaveHeader;
 
 /// The older versions that [`upgrade`] converts.
-const UPGRADABLE_VERSIONS: &[u32] = &[];
+const UPGRADABLE_VERSIONS: &[u32] = &[1];
 
 /// Returns whether a state written with `state_version` can be read at all.
 pub(crate) fn check(state_version: u32) -> Result<(), SaveError> {
@@ -35,10 +35,14 @@ pub(crate) fn decode_state(header: &SaveHeader, payload: &[u8]) -> Result<State,
     }
 }
 
-fn upgrade(header: &SaveHeader, _payload: &[u8]) -> Result<State, SaveError> {
-    Err(SaveError::IncompatibleVersion {
-        found: header.state_version,
-    })
+/// Returns the state in `payload`, which was written with an older version, as one of the
+/// current version.
+fn upgrade(header: &SaveHeader, payload: &[u8]) -> Result<State, SaveError> {
+    match header.state_version {
+        // All that version 1 held still reads as it is, but its player could only walk.
+        1 => header.codec.decode(payload).map(State::brought_to_life),
+        found => Err(SaveError::IncompatibleVersion { found }),
+    }
 }
 
 #[cfg(test)]
@@ -57,5 +61,9 @@ mod tests {
             check(0),
             Err(SaveError::IncompatibleVersion { found: 0 })
         ));
+        for version in UPGRADABLE_VERSIONS {
+            assert!(*version < STATE_VERSION);
+            assert!(check(*version).is_ok());
+        }
     }
 }

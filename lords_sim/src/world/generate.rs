@@ -1,9 +1,11 @@
 use std::f64::consts::TAU;
 
+use crate::item::{Item, Stack};
 use crate::object::Object;
+use crate::rng::Rng;
 use crate::space::{Length, Location};
 use crate::time::Timestamp;
-use crate::world::{Area, AreaKind, Plant, PlantSpecies, Rock, Thing, World};
+use crate::world::{Area, AreaKind, Pile, Plant, PlantSpecies, Rock, Thing, World};
 
 /// Half the side of the square that things are placed in, around the center of the plane.
 const EXTENT: i64 = 200_000;
@@ -38,19 +40,40 @@ const BIRCH_PERCENT: u64 = 15;
 const SHORE: i64 = 15_000;
 const SHORE_BIRCH_PERCENT: u64 = 60;
 
+/// How many places are tried for loose stones, and how many stones lie in one.
+const STONE_PLACES: u32 = 260;
+const STONES_IN_A_PLACE: (i64, i64) = (1, 3);
+
+/// How many places are tried for patches of each berry.
+const BERRY_PLACES: u32 = 420;
+const PATCH_WIDTH: (i64, i64) = (1_000, 3_000);
+const BILBERRY_HEIGHT: i64 = 300;
+const LINGONBERRY_HEIGHT: i64 = 150;
+
+/// The chance of a berry patch growing under the trees it does not favor: bilberries
+/// favor spruce, and lingonberries pine.
+const UNFAVORED_PERCENT: u64 = 30;
+
 impl World {
     /// Returns a forest with a lake in it, the same one every time for the same `seed`.
     ///
     /// The center of the plane is left clear and without water.
     pub fn generate(seed: u64) -> Self {
-        let mut rng = Rng(seed);
+        let mut rng = Rng::new(seed);
         let lake = lake(&mut rng);
         let boulders = boulders(&mut rng, &lake);
-        let trees = trees(&mut rng, &lake, &boulders);
+        let (trees, patches) = trees(&mut rng, &lake, &boulders);
+        let stones = stones(&mut rng, &lake);
+        let berries = berries(&mut rng, &lake, &patches);
 
         let mut world = Self::default();
         world.add_area(lake);
-        for thing in boulders.into_iter().chain(trees) {
+        for thing in boulders
+            .into_iter()
+            .chain(trees)
+            .chain(stones)
+            .chain(berries)
+        {
             world.add_thing(thing);
         }
         world
@@ -105,16 +128,32 @@ fn boulders(rng: &mut Rng, lake: &Area) -> Vec<Thing> {
     boulders
 }
 
-fn trees(rng: &mut Rng, lake: &Area, boulders: &[Thing]) -> Vec<Thing> {
-    let patches_per_side = 2 * EXTENT / PATCH + 1;
-    let spruce_patches: Vec<bool> = (0..patches_per_side * patches_per_side)
-        .map(|_| rng.chance(50))
-        .collect();
-    let is_spruce_patch = |location: Location| {
+/// The squares of the forest in which spruce is the common tree. Pine is in the rest.
+struct Patches {
+    spruce: Vec<bool>,
+}
+
+impl Patches {
+    const PER_SIDE: i64 = 2 * EXTENT / PATCH + 1;
+
+    fn new(rng: &mut Rng) -> Self {
+        Self {
+            spruce: (0..Self::PER_SIDE * Self::PER_SIDE)
+                .map(|_| rng.chance(50))
+                .collect(),
+        }
+    }
+
+    fn is_spruce(&self, location: Location) -> bool {
         let column = (location.x() + EXTENT) / PATCH;
         let row = (location.y() + EXTENT) / PATCH;
-        spruce_patches[(row * patches_per_side + column) as usize]
-    };
+        self.spruce[(row * Self::PER_SIDE + column) as usize]
+    }
+}
+
+fn trees(rng: &mut Rng, lake: &Area, boulders: &[Thing]) -> (Vec<Thing>, Patches) {
+    let patches = Patches::new(rng);
+    let is_spruce_patch = |location: Location| patches.is_spruce(location);
 
     let places_per_side = 2 * EXTENT / TREE_SPACING;
     let jitter = (TREE_SPACING / 10, TREE_SPACING * 9 / 10);
@@ -152,7 +191,58 @@ fn trees(rng: &mut Rng, lake: &Area, boulders: &[Thing]) -> Vec<Thing> {
         }
     }
 
-    trees
+    (trees, patches)
+}
+
+fn stones(rng: &mut Rng, lake: &Area) -> Vec<Thing> {
+    let mut stones = Vec::new();
+
+    for _ in 0..STONE_PLACES {
+        let location = Location::new(
+            rng.between((-EXTENT, EXTENT)),
+            rng.between((-EXTENT, EXTENT)),
+        );
+        let count = rng.between(STONES_IN_A_PLACE) as u32;
+        let pile = Pile::new(object(location), [Stack::new(Item::Stone, count)]);
+        let pile = Thing::Pile(pile);
+
+        if is_free(location, pile.footprint().as_millimeters(), lake) {
+            stones.push(pile);
+        }
+    }
+
+    stones
+}
+
+fn berries(rng: &mut Rng, lake: &Area, patches: &Patches) -> Vec<Thing> {
+    let kinds = [
+        (PlantSpecies::Bilberry, BILBERRY_HEIGHT, true),
+        (PlantSpecies::Lingonberry, LINGONBERRY_HEIGHT, false),
+    ];
+    let mut berries = Vec::new();
+
+    for (species, height, favors_spruce) in kinds {
+        for _ in 0..BERRY_PLACES {
+            let location = Location::new(
+                rng.between((-EXTENT, EXTENT)),
+                rng.between((-EXTENT, EXTENT)),
+            );
+            let width = rng.between(PATCH_WIDTH);
+            let favored = patches.is_spruce(location) == favors_spruce;
+            let grows = favored || rng.chance(UNFAVORED_PERCENT);
+
+            if grows && is_free(location, width / 2, lake) {
+                berries.push(Thing::Plant(Plant::new(
+                    object(location),
+                    species,
+                    Length::from_millimeters(height),
+                    Length::from_millimeters(width),
+                )));
+            }
+        }
+    }
+
+    berries
 }
 
 fn species(rng: &mut Rng, by_the_shore: bool, spruce_patch: bool) -> PlantSpecies {
@@ -195,44 +285,6 @@ fn object(location: Location) -> Object {
     Object::new(location, Timestamp::EPOCH)
 }
 
-/// The SplitMix64 generator, which gives the same numbers for the same seed everywhere.
-struct Rng(u64);
-
-impl Rng {
-    fn next(&mut self) -> u64 {
-        self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
-        let mut mixed = self.0;
-        mixed = (mixed ^ (mixed >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
-        mixed = (mixed ^ (mixed >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
-        mixed ^ (mixed >> 31)
-    }
-
-    /// Returns a number from zero up to but not including `bound`.
-    fn below(&mut self, bound: u64) -> u64 {
-        ((u128::from(self.next()) * u128::from(bound)) >> 64) as u64
-    }
-
-    /// Returns a number from `low` to `high` with both included.
-    fn between(&mut self, (low, high): (i64, i64)) -> i64 {
-        debug_assert!(low <= high);
-        low + self.below((high - low + 1) as u64) as i64
-    }
-
-    /// Returns a number from `low` to `high` that is more often near `low`.
-    fn mostly_low(&mut self, range: (i64, i64)) -> i64 {
-        self.between(range).min(self.between(range))
-    }
-
-    fn chance(&mut self, percent: u64) -> bool {
-        self.below(100) < percent
-    }
-
-    /// Returns a number from zero up to but not including one.
-    fn unit(&mut self) -> f64 {
-        (self.next() >> 11) as f64 / (1_u64 << 53) as f64
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -264,6 +316,9 @@ mod tests {
         assert!(count(Kind::Plant(PlantSpecies::Pine)) > 1_000);
         assert!(count(Kind::Plant(PlantSpecies::Birch)) > 500);
         assert!((250..=320).contains(&count(Kind::Rock)));
+        assert!((200..=260).contains(&count(Kind::Pile(Item::Stone))));
+        assert!(count(Kind::Plant(PlantSpecies::Bilberry)) > 150);
+        assert!(count(Kind::Plant(PlantSpecies::Lingonberry)) > 150);
     }
 
     #[test]
@@ -295,17 +350,6 @@ mod tests {
             for point in area.outline() {
                 assert!(point.x().abs() <= EXTENT && point.y().abs() <= EXTENT);
             }
-        }
-    }
-
-    #[test]
-    fn numbers_stay_within_their_bounds() {
-        let mut rng = Rng(42);
-
-        for _ in 0..10_000 {
-            assert!(rng.below(7) < 7);
-            assert!((-3..=3).contains(&rng.between((-3, 3))));
-            assert!((0.0..1.0).contains(&rng.unit()));
         }
     }
 }

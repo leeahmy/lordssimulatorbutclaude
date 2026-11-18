@@ -1,5 +1,6 @@
 mod app;
 mod datetime;
+mod help;
 mod icons;
 mod options;
 mod playthrough;

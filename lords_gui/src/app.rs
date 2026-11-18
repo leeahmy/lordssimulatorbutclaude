@@ -13,7 +13,7 @@ use crate::scenes::{
     AppAction, MainMenu, Overview, Scene, SceneResponse, Shared, TOGGLE_FULLSCREEN,
 };
 use crate::settings::{self, Settings};
-use crate::{icons, options};
+use crate::{help, icons, options};
 
 const ERROR_WIDTH: f32 = 320.0;
 
@@ -26,6 +26,7 @@ pub struct App {
     settings: Settings,
     saves: Saves,
     options_open: bool,
+    help_open: bool,
 }
 
 impl App {
@@ -36,7 +37,11 @@ impl App {
 
         icons::install(ctx);
         ctx.options_mut(|options| options.zoom_with_keyboard = false);
-        ctx.set_zoom_factor(settings.ui_scale.unwrap_or(settings::PROVISIONAL_UI_SCALE));
+        ctx.set_zoom_factor(
+            settings
+                .interface_scale
+                .unwrap_or(settings::PROVISIONAL_UI_SCALE),
+        );
         ctx.set_theme(settings.theme);
 
         let save_directory =
@@ -48,30 +53,39 @@ impl App {
             saves: Saves::new(save_directory, ctx),
             settings,
             options_open: false,
+            help_open: false,
         }
     }
 
-    fn pick_ui_scale(&mut self, ctx: &egui::Context) {
-        if self.settings.ui_scale.is_some() {
+    /// Fits the interface to the window, which fills the display unless the player has
+    /// made it smaller, unless the player has chosen a scale of their own.
+    ///
+    /// This is done all the time rather than once, since the window may be resized, sent
+    /// to full screen, or moved to a display of another size or scaling.
+    fn fit_ui_scale(&mut self, ctx: &egui::Context) {
+        if self.settings.interface_scale.is_some() {
             return;
         }
 
-        let zoom = ctx.zoom_factor();
-        let display = ctx
-            .input(|input| input.viewport().monitor_size)
-            .filter(|size| size.x >= 1.0 && size.y >= 1.0)
-            .unwrap_or_else(|| ctx.content_rect().size());
+        let fitted = ctx.input(|input| {
+            // The window's size comes in interface points. Counted back to pixels, and from
+            // those to the points of the system's own scaling, it no longer depends on the
+            // scale in use, so that fitting to it settles at once.
+            let system_scale = input.viewport().native_pixels_per_point.unwrap_or(1.0);
+            let window = input.content_rect().size() * input.pixels_per_point;
 
-        let scale = settings::pick_ui_scale(display * zoom);
-        self.settings.ui_scale = Some(scale);
-        ctx.set_zoom_factor(scale);
+            settings::pick_ui_scale(window / system_scale)
+        });
+        if fitted != ctx.zoom_factor() {
+            ctx.set_zoom_factor(fitted);
+        }
     }
 
     fn update_scene(&mut self, ui: &mut Ui) {
         let mut shared = Shared {
             settings: &mut self.settings,
             saves: &mut self.saves,
-            dialog_open: self.options_open,
+            dialog_open: self.options_open || self.help_open,
         };
         shared.dialog_open |= shared.saves.error().is_some();
 
@@ -142,6 +156,7 @@ impl App {
     fn perform(&mut self, action: AppAction, ctx: &egui::Context) {
         match action {
             AppAction::OpenOptions => self.options_open = true,
+            AppAction::OpenHelp => self.help_open = true,
             AppAction::ToggleFullscreen => {
                 let fullscreen = !options::is_fullscreen(ctx);
                 ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(fullscreen));
@@ -195,7 +210,7 @@ impl eframe::App for App {
         let ctx = ui.ctx().clone();
 
         self.saves.poll();
-        self.pick_ui_scale(&ctx);
+        self.fit_ui_scale(&ctx);
         if ctx.input_mut(|input| input.consume_shortcut(&TOGGLE_FULLSCREEN)) {
             self.perform(AppAction::ToggleFullscreen, &ctx);
         }
@@ -204,6 +219,9 @@ impl eframe::App for App {
 
         if self.options_open {
             self.options_open = options::show(&ctx, &mut self.settings);
+        }
+        if self.help_open {
+            self.help_open = help::show(&ctx);
         }
         self.error_dialog(&ctx);
         self.saved_notice(&ctx);

@@ -1,5 +1,8 @@
 use std::time::{Duration, Instant};
 
+/// The most ticks that are ever due at once, however late the clock is looked at.
+const MOST_DUE: u32 = 64;
+
 /// Decides when the next tick is due.
 #[derive(Debug)]
 pub(crate) struct Clock {
@@ -57,14 +60,20 @@ impl Clock {
         self.next_tick.get_or_insert(now + self.interval);
     }
 
-    /// Returns whether a tick is due at `now`, and if so starts the wait for the next one.
-    pub(crate) fn take_due_tick(&mut self, now: Instant) -> bool {
+    /// Returns how many ticks are due at `now`, and if any are starts the wait for the
+    /// next one.
+    ///
+    /// More than one is due when the clock is looked at later than a whole interval after
+    /// a tick came due, as it is when the interval is shorter than a thread can sleep for.
+    /// Ticks further behind than [`MOST_DUE`] are let go of.
+    pub(crate) fn take_due_ticks(&mut self, now: Instant) -> u32 {
         match self.next_tick {
             Some(due) if due <= now => {
+                let late = now.duration_since(due).as_nanos() / self.interval.as_nanos().max(1);
                 self.next_tick = Some(now + self.interval);
-                true
+                1 + late.min(u128::from(MOST_DUE - 1)) as u32
             }
-            _ => false,
+            _ => 0,
         }
     }
 }
@@ -81,8 +90,18 @@ mod tests {
         let start = Instant::now();
         let mut clock = Clock::starting_at(start, INTERVAL);
 
-        assert!(!clock.take_due_tick(start + INTERVAL - MOMENT));
-        assert!(clock.take_due_tick(start + INTERVAL));
+        assert_eq!(clock.take_due_ticks(start + INTERVAL - MOMENT), 0);
+        assert_eq!(clock.take_due_ticks(start + INTERVAL), 1);
+    }
+
+    #[test]
+    fn ticks_missed_are_due_together_up_to_a_limit() {
+        let start = Instant::now();
+        let mut clock = Clock::starting_at(start, INTERVAL);
+
+        assert_eq!(clock.take_due_ticks(start + INTERVAL * 4 + MOMENT), 4);
+        assert_eq!(clock.take_due_ticks(start + INTERVAL * 4 + MOMENT), 0);
+        assert_eq!(clock.take_due_ticks(start + INTERVAL * 10_000), MOST_DUE);
     }
 
     #[test]
@@ -90,8 +109,8 @@ mod tests {
         let start = Instant::now();
         let mut clock = Clock::starting_at(start, INTERVAL);
 
-        assert!(clock.take_due_tick(start + INTERVAL));
-        assert!(!clock.take_due_tick(start + INTERVAL));
+        assert_eq!(clock.take_due_ticks(start + INTERVAL), 1);
+        assert_eq!(clock.take_due_ticks(start + INTERVAL), 0);
     }
 
     #[test]
@@ -100,11 +119,11 @@ mod tests {
         let mut clock = Clock::starting_at(start, INTERVAL);
         let late = start + INTERVAL * 5 / 2;
 
-        assert!(clock.take_due_tick(late));
+        assert_eq!(clock.take_due_ticks(late), 2);
 
         assert_eq!(clock.deadline(), Some(late + INTERVAL));
-        assert!(!clock.take_due_tick(late + INTERVAL - MOMENT));
-        assert!(clock.take_due_tick(late + INTERVAL));
+        assert_eq!(clock.take_due_ticks(late + INTERVAL - MOMENT), 0);
+        assert_eq!(clock.take_due_ticks(late + INTERVAL), 1);
     }
 
     #[test]
@@ -116,7 +135,7 @@ mod tests {
 
         assert!(clock.is_paused());
         assert_eq!(clock.deadline(), None);
-        assert!(!clock.take_due_tick(start + INTERVAL * 10));
+        assert_eq!(clock.take_due_ticks(start + INTERVAL * 10), 0);
     }
 
     #[test]
@@ -129,8 +148,8 @@ mod tests {
         clock.resume(resumed);
 
         assert!(!clock.is_paused());
-        assert!(!clock.take_due_tick(resumed + INTERVAL - MOMENT));
-        assert!(clock.take_due_tick(resumed + INTERVAL));
+        assert_eq!(clock.take_due_ticks(resumed + INTERVAL - MOMENT), 0);
+        assert_eq!(clock.take_due_ticks(resumed + INTERVAL), 1);
     }
 
     #[test]
@@ -139,12 +158,12 @@ mod tests {
         let mut clock = Clock::paused(INTERVAL);
 
         assert!(clock.is_paused());
-        assert!(!clock.take_due_tick(start + INTERVAL * 10));
+        assert_eq!(clock.take_due_ticks(start + INTERVAL * 10), 0);
 
         clock.resume(start);
 
-        assert!(!clock.take_due_tick(start + INTERVAL - MOMENT));
-        assert!(clock.take_due_tick(start + INTERVAL));
+        assert_eq!(clock.take_due_ticks(start + INTERVAL - MOMENT), 0);
+        assert_eq!(clock.take_due_ticks(start + INTERVAL), 1);
     }
 
     #[test]
@@ -175,7 +194,7 @@ mod tests {
         clock.set_interval(INTERVAL * 4, start + MOMENT);
 
         assert_eq!(clock.deadline(), Some(start + INTERVAL));
-        assert!(clock.take_due_tick(start + INTERVAL));
+        assert_eq!(clock.take_due_ticks(start + INTERVAL), 1);
         assert_eq!(clock.deadline(), Some(start + INTERVAL * 5));
     }
 
