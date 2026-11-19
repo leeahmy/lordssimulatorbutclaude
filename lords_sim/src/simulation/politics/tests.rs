@@ -147,7 +147,7 @@ fn moot_chooses_whoever_most_would_follow() {
     assert_eq!(sim.state.settlement.as_ref().and_then(|s| s.leader), me);
     assert_eq!(
         last_note(&sim),
-        "The moot chooses you to lead Lordstead, with 3 of 4 voices."
+        "The moot chooses you as leader of Lordstead, with 3 of 4 voices."
     );
     assert!(sim.take_alert());
 }
@@ -256,7 +256,9 @@ fn laws_change_what_is_brought_in_eaten_and_worked_out() {
     assert_eq!(in_store(&sim, Item::DriedFish), 24);
     assert_eq!(politics(&sim).era, Era::Band);
     let insight = sim.state.settlement.as_ref().expect("founded").insight;
-    assert_eq!(insight, 13);
+    // A thinker, a little that comes by itself, and a tenth more for the two
+    // neighbours who know more.
+    assert_eq!(insight, 14);
     // A fisher eats 2,500 kcal and a thinker half as much again: 15 helpings of meat.
     assert_eq!(meat - in_store(&sim, Item::DriedMeat), 15);
 
@@ -265,7 +267,7 @@ fn laws_change_what_is_brought_in_eaten_and_worked_out() {
     pass_days(&mut sim, 1);
     assert_eq!(in_store(&sim, Item::DriedFish), 24 + 27);
     let insight = sim.state.settlement.as_ref().expect("founded").insight - insight;
-    assert_eq!(insight, 19);
+    assert_eq!(insight, 21);
 }
 
 #[test]
@@ -340,7 +342,7 @@ fn speech_feast_and_notices_win_people_over_each_in_its_time() {
     assert_eq!(regard(&sim, members[0]), 23);
     assert_eq!(regard(&sim, members[1]), 19);
     assert!(last_note(&sim).ends_with("1 nod along, and 1 turn away."));
-    assert_eq!(politics(&sim).appeal_rest, [1, 0, 0]);
+    assert_eq!(politics(&sim).appeal_rest, [1, 0, 0, 0, 0]);
     sim.apply(Command::Appeal(Appeal::Speech));
     assert_eq!(
         last_note(&sim),
@@ -363,6 +365,7 @@ fn speech_feast_and_notices_win_people_over_each_in_its_time() {
     assert_eq!(last_note(&sim), "Nobody here can read or write yet.");
     let settlement = sim.state.settlement.as_mut().expect("founded");
     settlement.advances.push(Advance::Writing);
+    settlement.literacy = 100;
     carry(&mut sim, Item::BirchBark, 5);
     sim.apply(Command::Appeal(Appeal::Notices));
     run_until_idle(&mut sim);
@@ -450,15 +453,14 @@ fn settlement_led_by_another_runs_itself() {
     assert_eq!(town.sites[0].kind, StructureKind::Hut);
     assert!(noted(&sim, "The site of a hut is marked out."));
 
+    // A handful of people have nobody to spare for thinking, but get somewhere all the
+    // same.
     pass_days(&mut sim, 30);
     let town = sim.view().settlement.expect("founded");
     assert!(town.housing >= 4, "houses for {}", town.housing);
-    assert!(
-        sim.view()
-            .people
-            .iter()
-            .any(|person| person.role == Role::Thinker)
-    );
+    assert!(town.food_days >= 60, "food for {} days", town.food_days);
+    let insight = sim.state.settlement.as_ref().expect("founded").insight;
+    assert!(insight >= 90, "{insight}");
 }
 
 #[test]
@@ -565,4 +567,294 @@ fn hamlet_of_a_generated_life_gets_through_its_first_year_by_itself() {
     );
     assert!(!noted(&sim, "has died of hunger"));
     assert!(town.politics.leader.is_some());
+}
+
+fn know(sim: &mut Simulation, advances: &[Advance]) {
+    let settlement = sim.state.settlement.as_mut().expect("founded");
+    settlement.advances.extend(advances);
+    sim.look();
+}
+
+fn built(sim: &Simulation, kind: StructureKind) -> crate::world::ThingId {
+    let found = sim
+        .structures()
+        .into_iter()
+        .find(|(_, built)| *built == kind);
+    found.expect("it stands").0
+}
+
+#[test]
+fn bronze_is_smelted_and_cast_by_hand_at_a_smithy() {
+    let (mut sim, _) = settled(&[20]);
+    know(
+        &mut sim,
+        &[Advance::Charcoal, Advance::Mining, Advance::Bronze],
+    );
+    carry(&mut sim, Item::CopperOre, 2);
+    carry(&mut sim, Item::TinOre, 1);
+    carry(&mut sim, Item::Charcoal, 2);
+    carry(&mut sim, Item::Stick, 1);
+
+    sim.apply(Command::Craft(Recipe::SmeltBronze));
+    assert_eq!(
+        last_note(&sim),
+        "To smelt bronze you still need a smithy within reach."
+    );
+
+    put_near(&mut sim, StructureKind::Smithy);
+    sim.apply(Command::Craft(Recipe::SmeltBronze));
+    run_until_idle(&mut sim);
+    assert_eq!(sim.state.player.carried().count(Item::Bronze), 1);
+    assert!(!sim.has_axe());
+
+    sim.apply(Command::Craft(Recipe::BronzeAxe));
+    run_until_idle(&mut sim);
+    assert!(sim.state.player.carried().has(Item::BronzeAxe));
+    assert!(sim.has_axe());
+}
+
+#[test]
+fn shift_at_a_workplace_adds_to_the_store_and_is_paid_once_there_is_coin() {
+    let (mut sim, _) = settled(&[20]);
+    know(&mut sim, &[Advance::Masonry]);
+    put_near(&mut sim, StructureKind::Quarry);
+    let quarry = crate::Subject::Thing(built(&sim, StructureKind::Quarry));
+    let shift = Command::Act {
+        verb: Verb::Labor,
+        subject: quarry,
+    };
+
+    sim.apply(shift.clone());
+    assert_eq!(sim.view().work.map(|work| work.needed), Some(4 * 3_600));
+    run_until_idle(&mut sim);
+    // Half of what a quarrier breaks in a day.
+    assert_eq!(in_store(&sim, Item::Stone), 5);
+    assert_eq!(politics(&sim).credit, 6_000);
+    assert!(noted(&sim, "You work a shift as a quarrier."));
+
+    know(&mut sim, &[Advance::Coinage]);
+    put_up(&mut sim, StructureKind::Market);
+    sim.state.settlement.as_mut().expect("founded").treasury = 100;
+    sim.apply(shift);
+    run_until_idle(&mut sim);
+    assert_eq!(sim.state.purse, 2);
+    assert!(noted(
+        &sim,
+        "You work a shift as a quarrier, and are paid 2 coins."
+    ));
+
+    let hut = StructureKind::Hut;
+    put_near(&mut sim, hut);
+    assert!(!Verb::for_kind(crate::world::Kind::Structure(hut)).contains(&Verb::Labor));
+}
+
+#[test]
+fn eldest_grown_child_leads_after_a_leader_where_that_is_their_birthright() {
+    let (mut sim, members) = settled(&[20, 20, 20]);
+    person_mut(&mut sim, members[0]).esteem = 70;
+    person_mut(&mut sim, members[2]).esteem = 90;
+    person_mut(&mut sim, members[1]).parents = [Some(members[0]), None];
+    lead(&mut sim, members[0]);
+    sim.state
+        .settlement
+        .as_mut()
+        .expect("founded")
+        .laws
+        .push(Law::Birthright);
+
+    sim.person_dies(members[0], "old age");
+    pass_days(&mut sim, 1);
+
+    let leader = sim.state.settlement.as_ref().and_then(|s| s.leader);
+    assert_eq!(leader, Some(members[1]));
+    assert!(noted(
+        &sim,
+        "By birthright, Eero1 Koski leads Lordstead after their parent."
+    ));
+}
+
+#[test]
+fn assembly_takes_two_thirds_for_a_law() {
+    let (mut sim, members) = settled(&[10; 8]);
+    for id in &members[..5] {
+        person_mut(&mut sim, *id).views = [0, 0, 0, 2];
+    }
+    for id in &members[5..] {
+        person_mut(&mut sim, *id).views = [0, 0, 0, -2];
+    }
+    sim.state
+        .settlement
+        .as_mut()
+        .expect("founded")
+        .laws
+        .push(Law::Assembly);
+    sim.refresh_society();
+    assert_eq!(politics(&sim).needed, 6);
+
+    sim.apply(Command::Legislate(Law::OpenGates, true));
+    assert!(!sim.lives_by(Law::OpenGates));
+    assert_eq!(
+        last_note(&sim),
+        "The moot will not have open gates: 5 of 8 voices for it."
+    );
+
+    person_mut(&mut sim, members[5]).views = [0, 0, 0, 1];
+    sim.apply(Command::Legislate(Law::OpenGates, true));
+    assert!(sim.lives_by(Law::OpenGates));
+
+    // A law that takes knowing more than is known cannot be thought of.
+    sim.apply(Command::Legislate(Law::Tariffs, true));
+    assert!(!sim.lives_by(Law::Tariffs));
+    assert_eq!(
+        last_note(&sim),
+        "Nobody can make sense of such a law before coinage is known."
+    );
+}
+
+#[test]
+fn newspaper_and_broadcast_cost_coin_and_reach_those_who_read_and_everyone() {
+    let (mut sim, members) = settled(&[20, 20]);
+    person_mut(&mut sim, members[0]).views = [2, 2, 2, 2];
+    for issue in Issue::ALL {
+        sim.apply(Command::SetView(issue, 2));
+    }
+    sim.state.settlement.as_mut().expect("founded").literacy = 100;
+
+    sim.apply(Command::Appeal(Appeal::Newspaper));
+    assert_eq!(last_note(&sim), "That costs 30 coins, and you have 0.");
+    sim.state.purse = 200;
+    sim.apply(Command::Appeal(Appeal::Newspaper));
+    assert_eq!(
+        last_note(&sim),
+        "There is no printing house to print a newspaper."
+    );
+
+    put_up(&mut sim, StructureKind::PrintingHouse);
+    sim.apply(Command::Appeal(Appeal::Newspaper));
+    run_until_idle(&mut sim);
+    assert_eq!(sim.state.purse, 170);
+    assert_eq!(regard(&sim, members[0]), 24);
+    assert_eq!(regard(&sim, members[1]), 22);
+    assert_eq!(politics(&sim).appeal_rest[Appeal::Newspaper as usize], 7);
+
+    put_up(&mut sim, StructureKind::BroadcastingHouse);
+    sim.apply(Command::Appeal(Appeal::Broadcast));
+    run_until_idle(&mut sim);
+    assert_eq!(sim.state.purse, 70);
+    assert_eq!(regard(&sim, members[1]), 24);
+    know(&mut sim, &[Advance::Television]);
+    sim.state
+        .settlement
+        .as_mut()
+        .expect("founded")
+        .appealed_on
+        .clear();
+    sim.state.purse = 100;
+    sim.apply(Command::Appeal(Appeal::Broadcast));
+    run_until_idle(&mut sim);
+    assert_eq!(regard(&sim, members[1]), 28);
+}
+
+#[test]
+fn bigger_house_goes_up_in_the_place_of_the_smallest_once_a_place_is_built_up() {
+    let (mut sim, _) = settled(&[20]);
+    for _ in 0..100 {
+        put_up(&mut sim, StructureKind::Hut);
+    }
+    stock(&mut sim, Item::Log, 40);
+    stock(&mut sim, Item::SpruceBough, 40);
+    stock(&mut sim, Item::BirchBark, 20);
+    let (standing, housing) = (sim.structures().len(), sim.housing());
+
+    sim.apply(Command::Plan(StructureKind::Longhouse));
+
+    assert_eq!(sim.structures().len(), standing);
+    assert_eq!(sim.housing(), housing - 4);
+    let town = sim.view().settlement.expect("founded");
+    assert_eq!(town.sites.len(), 1);
+    assert_eq!(town.sites[0].kind, StructureKind::Longhouse);
+}
+
+#[test]
+fn life_started_alone_has_nobody_and_nothing_until_a_cairn_is_raised() {
+    let name = Name::new("Ada".to_owned(), Vec::new(), "Lord".to_owned());
+    let mut sim = Simulation::set_out(name, Sex::Female, 7, crate::state::Start::Alone);
+    assert_eq!(sim.view().settlement, None);
+    assert!(sim.view().people.is_empty());
+    assert_eq!(sim.era(), Era::Band);
+
+    carry(&mut sim, Item::Stone, 10);
+    sim.apply(Command::Craft(Recipe::Cairn));
+    run_until_idle(&mut sim);
+
+    let town = sim.view().settlement.expect("founded");
+    assert_eq!(town.name, "Lordstead");
+    assert_eq!(town.people, 1);
+    assert!(town.politics.leads);
+    assert_eq!(town.age, crate::settlement::Age::Stone);
+    assert!(!town.coined && !town.monetized);
+}
+
+#[test]
+fn what_stands_built_is_kept_up_out_of_the_treasury_before_anyone_is_paid() {
+    let (mut sim, _) = settled(&[20]);
+    know(&mut sim, &[Advance::Coinage, Advance::Law]);
+    put_up(&mut sim, StructureKind::Market);
+    put_up(&mut sim, StructureKind::Courthouse);
+    let ledger = |sim: &Simulation| sim.state.settlement.as_ref().expect("founded").ledger;
+
+    // A market and a courthouse take 2 coins a day to keep up between them, and whoever
+    // leads is paid 10.
+    sim.state.settlement.as_mut().expect("founded").treasury = 5;
+    sim.work_day(&sim.members());
+    assert_eq!((ledger(&sim).upkeep, ledger(&sim).wages), (2, 3));
+    assert!(ledger(&sim).unpaid);
+    assert_eq!(sim.state.purse, 0);
+
+    sim.state.settlement.as_mut().expect("founded").treasury = 500;
+    sim.work_day(&sim.members());
+    assert_eq!((ledger(&sim).upkeep, ledger(&sim).wages), (2, 10));
+    assert!(!ledger(&sim).unpaid);
+    assert_eq!(sim.state.purse, 10);
+
+    sim.apply(Command::SetTax(80));
+    assert_eq!(sim.view().settlement.expect("founded").tax, 50);
+}
+
+#[test]
+fn offices_do_more_good_under_those_who_suit_them() {
+    use crate::people::Trait;
+    use crate::politics::Office;
+
+    let (mut sim, members) = settled(&[20, 20, 20]);
+    person_mut(&mut sim, members[0]).traits = vec![Trait::Bold];
+    person_mut(&mut sim, members[1]).traits = vec![Trait::Kind];
+    assert_eq!(sim.office(Office::Marshal), 0);
+    let esteem = person_mut(&mut sim, members[0]).esteem;
+
+    sim.apply(Command::Appoint(Office::Marshal, Some(members[0])));
+    assert_eq!(sim.office(Office::Marshal), 2);
+    assert_eq!(sim.defence(), 4);
+    assert_eq!(regard(&sim, members[0]), 30);
+    assert_eq!(person_mut(&mut sim, members[0]).esteem, esteem + 5);
+    assert!(noted(&sim, "Eero0 Koski is made marshal."));
+
+    // Nobody holds two offices, and an office is done no better by the wrong sort.
+    sim.apply(Command::Appoint(Office::Almoner, Some(members[0])));
+    assert_eq!(sim.office(Office::Marshal), 0);
+    assert_eq!(sim.office(Office::Almoner), 1);
+    sim.apply(Command::Appoint(Office::Almoner, Some(members[1])));
+    assert_eq!(sim.office(Office::Almoner), 2);
+
+    let view = politics(&sim);
+    assert_eq!(view.offices.len(), 4);
+    assert_eq!(view.offices[3].1, Some(("Eero1 Koski".to_owned(), true)));
+    assert_eq!(view.trusted.len(), 3);
+
+    sim.person_dies(members[1], "old age");
+    assert_eq!(sim.office(Office::Almoner), 0);
+
+    lead(&mut sim, members[2]);
+    sim.apply(Command::Appoint(Office::Treasurer, Some(members[0])));
+    assert!(last_note(&sim).starts_with("You have no say in that."));
 }

@@ -214,10 +214,15 @@ fn stones(rng: &mut Rng, lake: &Area) -> Vec<Thing> {
     stones
 }
 
+const CHANTERELLE_HEIGHT: i64 = 80;
+const NETTLE_HEIGHT: i64 = 700;
+
 fn berries(rng: &mut Rng, lake: &Area, patches: &Patches) -> Vec<Thing> {
     let kinds = [
         (PlantSpecies::Bilberry, BILBERRY_HEIGHT, true),
         (PlantSpecies::Lingonberry, LINGONBERRY_HEIGHT, false),
+        (PlantSpecies::Chanterelle, CHANTERELLE_HEIGHT, true),
+        (PlantSpecies::Nettle, NETTLE_HEIGHT, false),
     ];
     let mut berries = Vec::new();
 

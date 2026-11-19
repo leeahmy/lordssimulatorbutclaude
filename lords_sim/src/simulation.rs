@@ -1,3 +1,7 @@
+mod abroad;
+mod economy;
+mod fortune;
+mod govern;
 mod life;
 mod politics;
 mod society;
@@ -7,7 +11,7 @@ use std::sync::Arc;
 use crate::action::{AtHand, Job, Verb};
 use crate::climate::Conditions;
 use crate::craft::Recipe;
-use crate::item::{HEAVY_LOAD, Item};
+use crate::item::Item;
 use crate::journal::{Entry, Tone};
 use crate::map::{self, Map, Surface};
 use crate::object::{Activity, Human, Living, Name, Sex};
@@ -17,7 +21,7 @@ use crate::politics::{Appeal, Issue, Law};
 use crate::route;
 use crate::settlement::Advance;
 use crate::space::{Length, Location};
-use crate::state::State;
+use crate::state::{Start, State};
 use crate::time::{TICKS_PER_SECOND, Timestamp};
 use crate::view::{PersonView, SettlementView, View, Walk, Work};
 use crate::world::index::Grid;
@@ -32,6 +36,7 @@ const FIRESIDE: Length = Length::from_meters(5);
 /// How fast someone walks through snow and under a heavy load, in hundredths of how fast
 /// they walk otherwise.
 const SNOW_PACE: i64 = 80;
+const SKIING_PACE: i64 = 130;
 const LOADED_PACE: i64 = 75;
 
 pub struct Simulation {
@@ -56,6 +61,7 @@ pub struct Simulation {
     alert: bool,
     /// What the player is shown of the other people, nearest to them at heart first.
     census: Arc<[PersonView]>,
+    kin: Arc<[crate::view::KinView]>,
     town: Option<Arc<SettlementView>>,
     /// Whether what is shown of the others and of the settlement may have changed.
     society_stale: bool,
@@ -68,9 +74,15 @@ impl Simulation {
     }
 
     /// Returns a simulation of a player setting out on a life in the world that
-    /// [`World::generate`] makes of `seed`.
+    /// [`World::generate`] makes of `seed`, as a newcomer to a hamlet.
     pub fn generate(name: Name, sex: Sex, seed: u64) -> Self {
-        Self::from_state(State::generate(name, sex, seed))
+        Self::set_out(name, sex, seed, Start::Hamlet)
+    }
+
+    /// Returns a simulation of a player setting out on a life in the world that
+    /// [`World::generate`] makes of `seed`, the way `start` tells.
+    pub fn set_out(name: Name, sex: Sex, seed: u64, start: Start) -> Self {
+        Self::from_state(State::begin(name, sex, seed, start))
     }
 
     pub fn from_state(state: State) -> Self {
@@ -98,6 +110,7 @@ impl Simulation {
             stale: false,
             alert: false,
             census: Arc::from(Vec::new()),
+            kin: Arc::from(Vec::new()),
             town: None,
             society_stale: false,
         };
@@ -178,6 +191,11 @@ impl Simulation {
             settlement: self.town.clone(),
             routine: self.state.routine,
             past_lives: self.state.past_lives,
+            purse: self.state.purse,
+            neighbours: self.state.neighbours.clone(),
+            holdings: self.state.holdings.clone(),
+            income: self.state.income,
+            kin: Arc::clone(&self.kin),
         }
     }
 
@@ -239,6 +257,14 @@ impl Simulation {
             Command::Legislate(law, wanted) => self.legislate(law, wanted),
             Command::SetSteward(steward) => self.set_steward(steward),
             Command::Appeal(appeal) => self.take_up(Job::Appeal(appeal)),
+            Command::SetTax(tax) => self.set_tax(tax),
+            Command::Order(item, count) => self.order(item, count),
+            Command::Envoy(neighbour, mission) => self.send_envoy(neighbour, mission),
+            Command::Invest(kind) => self.invest(kind),
+            Command::Appoint(office, person) => self.appoint(office, person),
+            Command::Apprentice(person, role) => self.apprentice(person, role),
+            Command::Donate(coins) => self.donate(coins),
+            Command::Endow(coins) => self.endow(coins),
             Command::LiveOn(_) => {}
         }
         if self.stale {
@@ -326,10 +352,13 @@ impl Simulation {
         let mut stride = Human::WALKING_SPEED / TICKS_PER_SECOND as i64;
 
         stride = stride * i64::from(player.body().pace_percent()) / 100;
-        if self.conditions.snow {
+        if self.conditions.snow && player.carried().has(Item::Skis) {
+            // On skis, snow is the fastest going there is.
+            stride = stride * SKIING_PACE / 100;
+        } else if self.conditions.snow {
             stride = stride * SNOW_PACE / 100;
         }
-        if player.carried().weight() > HEAVY_LOAD {
+        if player.carried().is_heavy() {
             stride = stride * LOADED_PACE / 100;
         }
         stride
@@ -471,10 +500,12 @@ fn at_hand(
                 }
                 StructureKind::Bed => at_hand.bed = true,
                 StructureKind::Well => at_hand.water = true,
-                kind @ (StructureKind::Kiln | StructureKind::Smithy) => {
-                    at_hand.workplaces.push(kind);
-                }
-                StructureKind::Cairn | StructureKind::Storehouse if at_hand.store.is_none() => {
+                StructureKind::Cairn | StructureKind::Storehouse | StructureKind::Market
+                    if at_hand.store.is_none() =>
+                {
+                    if structure.kind() == StructureKind::Market {
+                        at_hand.workplaces.push(StructureKind::Market);
+                    }
                     let store = cairn.and_then(|cairn| Some((cairn, world.structure(cairn)?)));
                     if let Some((cairn, store)) = store {
                         for stack in store.hold().stacks() {
@@ -488,6 +519,9 @@ fn at_hand(
                     if better {
                         at_hand.shelter = Some(kind);
                     }
+                }
+                kind if crate::settlement::building(kind).is_some() => {
+                    at_hand.workplaces.push(kind);
                 }
                 _ => {}
             },
@@ -547,6 +581,24 @@ pub enum Command {
     SetSteward(bool),
     /// Has the player set about winning over the people of the settlement.
     Appeal(Appeal),
+    /// Sets the share of what people earn that is raised in taxes, in hundredths, if the
+    /// player leads.
+    SetTax(u8),
+    /// Has the merchants buy so many of an item from outside in all, or no more of it
+    /// if that is none, if the player leads.
+    Order(Item, u32),
+    /// Sends an envoy to the neighbour of the number given, if the player leads.
+    Envoy(usize, crate::neighbour::Mission),
+    /// Gives an office to someone, or to nobody, if the player leads.
+    Appoint(crate::politics::Office, Option<PersonId>),
+    /// Apprentices a child of the player character to a trade.
+    Apprentice(PersonId, Role),
+    /// Buys the player character a share in a workplace of the kind.
+    Invest(StructureKind),
+    /// Gives so many coins out of the player character's purse to the treasury.
+    Donate(u32),
+    /// Gives so many coins out of the player character's purse to those who think.
+    Endow(u32),
 }
 
 #[cfg(test)]

@@ -5,6 +5,7 @@ use crate::climate::Climate;
 use crate::item::Item;
 use crate::journal::{Journal, Tone};
 use crate::memory::Memory;
+use crate::neighbour::Neighbour;
 use crate::object::{Human, Living, Name, Object, Sex};
 use crate::people::{Person, Role, family_name, given_name};
 use crate::politics::random_views;
@@ -86,6 +87,57 @@ pub struct State {
     /// How many lives the player has lived before this one.
     #[serde(default)]
     pub past_lives: u32,
+
+    /// The coins the player character has, which are fewer than none when they owe.
+    #[serde(default)]
+    pub purse: i64,
+
+    /// The other settlements of the wider world.
+    #[serde(default)]
+    pub neighbours: Vec<Neighbour>,
+
+    /// The shares the player character holds in workplaces of each kind.
+    #[serde(default)]
+    pub holdings: Vec<(StructureKind, u32)>,
+
+    /// What those shares paid the day before.
+    #[serde(default)]
+    pub income: i64,
+}
+
+/// How a generated life starts.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub enum Start {
+    /// Alone in the forest, with everything still to be built.
+    #[default]
+    Alone,
+    /// As a newcomer to a hamlet that someone else leads.
+    Hamlet,
+}
+
+impl Start {
+    pub const ALL: [Self; 2] = [Self::Alone, Self::Hamlet];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Alone => "Alone in the wild",
+            Self::Hamlet => "A newcomer in a hamlet",
+        }
+    }
+
+    /// Returns what starting so comes to.
+    pub fn telling(self) -> &'static str {
+        match self {
+            Self::Alone => {
+                "Nobody for miles. Found a settlement of your own, win over the wanderers \
+                 who pass, and build it up from a cairn of stones."
+            }
+            Self::Hamlet => {
+                "Six people in a few huts, led by their eldest. Nobody knows you. Earn \
+                 your standing among them, or strike out on your own."
+            }
+        }
+    }
 }
 
 /// The end of a life.
@@ -112,17 +164,27 @@ impl State {
             settlement: None,
             routine: false,
             past_lives: 0,
+            purse: 0,
+            neighbours: Vec::new(),
+            holdings: Vec::new(),
+            income: 0,
         }
     }
 
     /// Returns the state of a player setting out on [`FIRST_MORNING`] in the world that
-    /// [`World::generate`] makes of `seed`.
+    /// [`World::generate`] makes of `seed`, as a newcomer to a hamlet.
     pub fn generate(name: Name, sex: Sex, seed: u64) -> Self {
+        Self::begin(name, sex, seed, Start::Hamlet)
+    }
+
+    /// Returns the state of a player setting out on [`FIRST_MORNING`] in the world that
+    /// [`World::generate`] makes of `seed`, the way `start` tells.
+    pub fn begin(name: Name, sex: Sex, seed: u64, start: Start) -> Self {
         let mut state = Self {
             world: World::generate(seed),
             ..Self::new(name, sex)
         };
-        state.set_out(seed);
+        state.set_out(seed, start);
         state
     }
 
@@ -132,7 +194,7 @@ impl State {
     /// States were like that up to version 1.
     pub fn brought_to_life(mut self) -> Self {
         let seed = self.world.things().count() as u64 ^ self.time.as_seconds();
-        self.set_out(seed);
+        self.set_out(seed, Start::Hamlet);
         self
     }
 
@@ -228,6 +290,8 @@ impl State {
             person.regard = self.rng.between((8, 18)) as u8;
             person.esteem = 20 + (age / 2) as u8;
             person.views = random_views(&mut self.rng);
+            person.traits = crate::people::random_traits(&mut self.rng, &[]);
+            person.skill = (age.min(40) as u8).saturating_mul(2).min(60);
             ids.push(self.world.add_person(person));
         }
         // The couple, and their child.
@@ -252,7 +316,7 @@ impl State {
         Some((name, leader))
     }
 
-    fn set_out(&mut self, seed: u64) {
+    fn set_out(&mut self, seed: u64, start: Start) {
         self.time = self.time.max(FIRST_MORNING);
         self.started = self.time;
         // Twenty years to the day, five of them leap years or near enough.
@@ -273,8 +337,12 @@ impl State {
         let lake = shores
             .min_by_key(|shore| at.distance_to(*shore))
             .map(|shore| at.bearing_to(shore).name());
-        let hamlet = self.raise_hamlet();
+        let hamlet = match start {
+            Start::Alone => None,
+            Start::Hamlet => self.raise_hamlet(),
+        };
 
+        self.neighbours = Neighbour::generate(&mut self.rng);
         let mut words = match &hamlet {
             Some((place, leader)) => format!(
                 "You have come to {place}, a few huts in the forest, with a knife, a fire \
@@ -282,7 +350,8 @@ impl State {
                  Winter is half a year away."
             ),
             None => "You are alone in the forest with a knife, a fire steel, and a little \
-                     bread. Winter is half a year away."
+                     bread. Nobody lives for miles around, though now and then someone \
+                     passes through. Winter is half a year away."
                 .to_owned(),
         };
         if let Some(way) = lake {
@@ -351,6 +420,21 @@ mod tests {
                 .contains(leader.name.first())
         );
         assert_eq!(State::generate(Name::default(), Sex::Female, 3), state);
+    }
+
+    #[test]
+    fn life_can_start_alone_with_nobody_and_nothing_built() {
+        let state = State::begin(Name::default(), Sex::Male, 3, Start::Alone);
+
+        assert_eq!(state.settlement, None);
+        assert_eq!(state.world.people().count(), 0);
+        assert_eq!(state.time, FIRST_MORNING);
+        assert!(state.player.carried().has(Item::Knife));
+        assert!(state.journal.entries()[0].text.starts_with("You are alone"));
+        assert_eq!(Start::default(), Start::Alone);
+        for start in Start::ALL {
+            assert!(!start.name().is_empty() && !start.telling().is_empty());
+        }
     }
 
     #[test]

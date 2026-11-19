@@ -47,30 +47,44 @@ pub enum Verb {
     DigClay,
     /// Raking bog ore off the bottom of the shallows.
     RakeOre,
-    /// Paying someone in food to think for a while.
+    /// Paying someone in food, or in coin once there is coin, to think for a while.
     Hire,
+    DigSand,
+    /// Breaking stone off a boulder.
+    Quarry,
+    /// Working half a day at a workplace of the settlement.
+    Labor,
+    /// Stalking deer through the forest with a bow.
+    Hunt,
 }
 
 impl Verb {
     /// Returns what there is to do to something of `kind`.
-    pub const fn for_kind(kind: Kind) -> &'static [Self] {
+    pub fn for_kind(kind: Kind) -> &'static [Self] {
         match kind {
             Kind::Plant(PlantSpecies::Spruce) => &[
                 Self::GatherSticks,
                 Self::GatherBoughs,
                 Self::DigRoots,
                 Self::Fell,
+                Self::Hunt,
             ],
             Kind::Plant(PlantSpecies::Pine | PlantSpecies::Birch) => {
-                &[Self::GatherSticks, Self::StripBark, Self::Fell]
+                &[Self::GatherSticks, Self::StripBark, Self::Fell, Self::Hunt]
             }
-            Kind::Plant(PlantSpecies::Bilberry | PlantSpecies::Lingonberry) => &[Self::PickBerries],
-            Kind::Rock => &[],
+            Kind::Plant(
+                PlantSpecies::Bilberry
+                | PlantSpecies::Lingonberry
+                | PlantSpecies::Chanterelle
+                | PlantSpecies::Nettle,
+            ) => &[Self::PickBerries],
+            Kind::Rock => &[Self::Quarry],
             Kind::Lake => &[
                 Self::Drink,
                 Self::FillWater,
                 Self::Fish,
                 Self::DigClay,
+                Self::DigSand,
                 Self::RakeOre,
             ],
             Kind::Pile(_) => &[Self::PickUp],
@@ -85,7 +99,11 @@ impl Verb {
             Kind::Structure(StructureKind::Cairn | StructureKind::Storehouse) => &[Self::Deposit],
             Kind::Structure(StructureKind::Site) => &[Self::Build],
             Kind::Structure(StructureKind::Well) => &[Self::Drink, Self::FillWater],
-            Kind::Structure(_) => &[],
+            Kind::Structure(StructureKind::Market) => &[Self::Deposit, Self::Labor],
+            Kind::Structure(kind) => {
+                let works = crate::building::building(kind).is_some_and(|plan| plan.jobs.is_some());
+                if works { &[Self::Labor] } else { &[] }
+            }
             Kind::Person(Bond::Stranger | Bond::Child) => &[Self::Talk, Self::Gift],
             Kind::Person(Bond::Friend) => &[Self::Talk, Self::Gift, Self::Invite, Self::Court],
             Kind::Person(Bond::Companion) => &[Self::Talk, Self::Gift, Self::Court, Self::Hire],
@@ -101,6 +119,8 @@ impl Verb {
             Self::StripBark if kind == Kind::Plant(PlantSpecies::Pine) => "Strip inner bark",
             Self::StripBark => "Strip bark",
             Self::DigRoots => "Dig up roots",
+            Self::PickBerries if kind == Kind::Plant(PlantSpecies::Chanterelle) => "Pick mushrooms",
+            Self::PickBerries if kind == Kind::Plant(PlantSpecies::Nettle) => "Cut nettles",
             Self::PickBerries => "Pick berries",
             Self::Fell => "Fell",
             Self::PickUp => "Pick up",
@@ -127,6 +147,10 @@ impl Verb {
             Self::DigClay => "Dig clay",
             Self::RakeOre => "Rake bog ore",
             Self::Hire => "Hire to think for you",
+            Self::DigSand => "Dig sand",
+            Self::Quarry => "Break stone off it",
+            Self::Labor => "Work a shift",
+            Self::Hunt => "Hunt from here",
         }
     }
 
@@ -137,7 +161,7 @@ impl Verb {
             Self::GatherBoughs => "Cutting boughs",
             Self::StripBark => "Stripping bark",
             Self::DigRoots => "Digging up roots",
-            Self::PickBerries => "Picking berries",
+            Self::PickBerries => "Picking",
             Self::Fell => "Felling a tree",
             Self::PickUp => "Picking things up",
             Self::Drink => "Drinking",
@@ -156,6 +180,10 @@ impl Verb {
             Self::DigClay => "Digging clay",
             Self::RakeOre => "Raking bog ore",
             Self::Hire => "Striking a bargain",
+            Self::DigSand => "Digging sand",
+            Self::Quarry => "Breaking stone",
+            Self::Labor => "Working a shift",
+            Self::Hunt => "Stalking deer",
         }
     }
 
@@ -167,6 +195,8 @@ impl Verb {
             Self::Fish => Some(Item::FishingRod),
             Self::FillWater => Some(Item::BarkPot),
             Self::Light => Some(Item::FireSteel),
+            Self::Quarry => Some(Item::Pickaxe),
+            Self::Hunt => Some(Item::Bow),
             _ => None,
         }
     }
@@ -184,7 +214,9 @@ impl Verb {
             Self::Light => Some(Skill::Firemaking),
             Self::Collect | Self::TakeDown => Some(Skill::Trapping),
             Self::Build => Some(Skill::Building),
-            Self::DigClay | Self::RakeOre => Some(Skill::Foraging),
+            Self::DigClay | Self::RakeOre | Self::DigSand | Self::Quarry => Some(Skill::Foraging),
+            Self::Labor => Some(Skill::Crafting),
+            Self::Hunt => Some(Skill::Trapping),
             Self::HangFood => Some(Skill::Cooking),
             Self::PickUp
             | Self::Drink
@@ -207,7 +239,12 @@ impl Verb {
     pub const fn repeats(self) -> bool {
         matches!(
             self,
-            Self::GatherSticks | Self::GatherBoughs | Self::PickBerries | Self::Fish | Self::Build
+            Self::GatherSticks
+                | Self::GatherBoughs
+                | Self::PickBerries
+                | Self::Fish
+                | Self::Build
+                | Self::Quarry
         )
     }
 }
@@ -260,21 +297,27 @@ impl AtHand {
 
     /// Returns whether there is `tool` to use, or something that does for it.
     pub fn has_tool(&self, carried: &Inventory, tool: Item) -> bool {
-        let stand_in = tool.stand_in().map_or(0, |item| self.count(carried, item));
-        self.count(carried, tool) + stand_in > 0
+        let stand_ins: u32 = tool
+            .stand_ins()
+            .iter()
+            .map(|item| self.count(carried, *item))
+            .sum();
+        self.count(carried, tool) + stand_ins > 0
     }
 
     /// Returns everything that `recipe` takes and that someone carrying `carried` lacks.
     pub fn lacks(&self, carried: &Inventory, recipe: Recipe) -> Vec<Lack> {
         let mut lacks = Vec::new();
 
-        if let Some((advance, workplace)) = recipe.craft() {
-            if !self.advances.contains(&advance) {
-                lacks.push(Lack::Knowledge(advance));
-            }
-            if !self.workplaces.contains(&workplace) {
-                lacks.push(Lack::Workplace(workplace));
-            }
+        if let Some(advance) = recipe.knowledge()
+            && !self.advances.contains(&advance)
+        {
+            lacks.push(Lack::Knowledge(advance));
+        }
+        if let Some(workplace) = recipe.workplace()
+            && !self.workplaces.contains(&workplace)
+        {
+            lacks.push(Lack::Workplace(workplace));
         }
         for tool in recipe.tools() {
             if !self.has_tool(carried, *tool) {
@@ -391,7 +434,12 @@ mod tests {
         assert!(lake.contains(&Verb::Drink) && lake.contains(&Verb::Fish));
         assert!(spruce.contains(&Verb::GatherBoughs));
         assert!(!Verb::for_kind(Kind::Plant(PlantSpecies::Birch)).contains(&Verb::GatherBoughs));
-        assert!(Verb::for_kind(Kind::Rock).is_empty());
+        assert_eq!(Verb::for_kind(Kind::Rock), [Verb::Quarry]);
+        assert_eq!(
+            Verb::for_kind(Kind::Structure(StructureKind::Smithy)),
+            [Verb::Labor]
+        );
+        assert!(Verb::for_kind(Kind::Structure(StructureKind::Hut)).is_empty());
         assert_eq!(
             Verb::StripBark.name(Kind::Plant(PlantSpecies::Pine)),
             "Strip inner bark"

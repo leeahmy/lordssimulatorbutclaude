@@ -7,6 +7,7 @@ fn filled_in() -> CharacterCreation {
         middle_names: vec!["Maria".to_owned(), "   ".to_owned(), " Mäki".to_owned()],
         last_name: "Lord".to_owned(),
         sex: Some(Sex::Female),
+        start: Start::Hamlet,
         focus_middle_name: None,
     }
 }
@@ -27,6 +28,12 @@ fn what_is_missing_is_asked_for_in_order() {
 
     creation.sex = Some(Sex::Male);
     assert_eq!(creation.missing_requirement(), None);
+}
+
+#[test]
+fn life_starts_alone_unless_a_hamlet_is_chosen() {
+    assert_eq!(CharacterCreation::default().start, Start::Alone);
+    assert_eq!(filled_in().start, Start::Hamlet);
 }
 
 #[test]

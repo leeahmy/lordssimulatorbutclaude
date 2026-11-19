@@ -964,3 +964,199 @@ fn generated_life_can_be_lived_off_the_land() {
 
     assert_eq!(carried(&sim, Item::Cordage), 1);
 }
+
+#[test]
+fn stone_is_broken_off_a_boulder_with_a_pickaxe() {
+    let mut world = World::default();
+    let boulder = world.add_thing(Thing::Rock(crate::world::Rock::new(
+        Object::new(Location::new(0, 600), Timestamp::EPOCH),
+        Length::from_meters(2),
+        Length::from_meters(1),
+    )));
+    let mut sim = simulation(world);
+    let quarry = Command::Act {
+        verb: Verb::Quarry,
+        subject: Subject::Thing(boulder),
+    };
+
+    sim.apply(quarry.clone());
+    assert_eq!(sim.state.player.activity(), None);
+    assert!(
+        sim.state
+            .journal
+            .entries()
+            .last()
+            .is_some_and(|entry| entry.text == "You need a pickaxe for that.")
+    );
+
+    carry(&mut sim, Item::Pickaxe, 1);
+    sim.apply(quarry);
+    for _ in 0..1_200 {
+        sim.tick();
+    }
+    assert_eq!(carried(&sim, Item::Stone), 4);
+    // It goes on until the load is heavy.
+    assert!(sim.state.player.activity().is_some());
+}
+
+#[test]
+fn sand_is_dug_only_by_those_who_know_what_it_is_good_for() {
+    let mut world = World::default();
+    let water = Subject::Area(world.add_area(lake(1_000, 20_000)));
+    let mut sim = simulation(world);
+
+    sim.apply(Command::Act {
+        verb: Verb::DigSand,
+        subject: water,
+    });
+
+    assert_eq!(carried(&sim, Item::Sand), 0);
+    assert!(sim.state.journal.entries().last().is_some_and(|entry| {
+        entry.text == "Nobody here knows what to look for, or what to do with it."
+    }));
+}
+
+#[test]
+fn medicine_ends_a_sickness_and_is_not_taken_by_the_well() {
+    let mut sim = simulation(World::default());
+    carry(&mut sim, Item::Medicine, 2);
+
+    sim.apply(Command::Consume(Item::Medicine));
+    assert_eq!(carried(&sim, Item::Medicine), 2);
+
+    let until = Timestamp::from_seconds(sim.state.time.as_seconds() + 30 * HOUR);
+    sim.state.player.body_mut().sicken(until);
+    sim.apply(Command::Consume(Item::Medicine));
+    sim.tick();
+    assert_eq!(carried(&sim, Item::Medicine), 1);
+    assert!(!sim.state.player.body().is_sick());
+}
+
+#[test]
+fn better_axe_fells_faster_and_only_the_warmest_of_each_garment_counts() {
+    let mut world = World::default();
+    let pine = Subject::Thing(world.add_thing(tree(PlantSpecies::Pine, 0, 600)));
+    let mut sim = simulation(world);
+    let needed = |sim: &Simulation| {
+        sim.needed(Job::Act {
+            verb: Verb::Fell,
+            subject: pine,
+        })
+    };
+
+    carry(&mut sim, Item::StoneAxe, 1);
+    let with_stone = needed(&sim);
+    carry(&mut sim, Item::SteelAxe, 1);
+    assert_eq!(needed(&sim), with_stone * 35 / 100);
+
+    let bare = sim.state.player.clothing_warmth();
+    carry(&mut sim, Item::WoolCoat, 1);
+    assert_eq!(sim.state.player.clothing_warmth(), bare + 80);
+    carry(&mut sim, Item::FurCoat, 1);
+    assert_eq!(sim.state.player.clothing_warmth(), bare + 90);
+    carry(&mut sim, Item::LeatherBoots, 1);
+    assert_eq!(sim.state.player.clothing_warmth(), bare + 120);
+}
+
+fn patch(species: PlantSpecies, x: i64, y: i64) -> Thing {
+    Thing::Plant(Plant::new(
+        Object::new(Location::new(x, y), Timestamp::EPOCH),
+        species,
+        Length::from_millimeters(300),
+        Length::from_millimeters(2_000),
+    ))
+}
+
+#[test]
+fn nettles_are_cut_in_early_summer_and_mushrooms_picked_in_autumn() {
+    let mut world = World::default();
+    let nettles = Subject::Thing(world.add_thing(patch(PlantSpecies::Nettle, 0, 600)));
+    let mushrooms = Subject::Thing(world.add_thing(patch(PlantSpecies::Chanterelle, 600, 0)));
+    let pick = |subject| Command::Act {
+        verb: Verb::PickBerries,
+        subject,
+    };
+    let last = |sim: &Simulation| sim.state.journal.entries().last().map(|e| e.text.clone());
+
+    // Late in May.
+    let mut sim = boreal(world.clone(), 20, 2);
+    sim.apply(pick(mushrooms));
+    assert_eq!(
+        last(&sim).as_deref(),
+        Some("No mushrooms have come up here at this time of the year.")
+    );
+    sim.apply(pick(nettles));
+    for _ in 0..200 {
+        sim.tick();
+    }
+    assert!(carried(&sim, Item::Nettles) >= 1);
+
+    // Six nettles make a length of cordage.
+    carry(&mut sim, Item::Nettles, 6);
+    sim.apply(Command::Stop);
+    let cordage = carried(&sim, Item::Cordage);
+    sim.apply(Command::Craft(Recipe::NettleCordage));
+    for _ in 0..600 {
+        sim.tick();
+    }
+    assert_eq!(carried(&sim, Item::Cordage), cordage + 1);
+
+    // Early in September.
+    let mut sim = boreal(world, 125, 2);
+    sim.apply(pick(nettles));
+    assert_eq!(
+        last(&sim).as_deref(),
+        Some("The nettles are not worth cutting at this time of the year.")
+    );
+    sim.apply(pick(mushrooms));
+    for _ in 0..200 {
+        sim.tick();
+    }
+    assert!(carried(&sim, Item::Chanterelles) >= 1);
+    assert_eq!(
+        Verb::PickBerries.name(Kind::Plant(PlantSpecies::Chanterelle)),
+        "Pick mushrooms"
+    );
+}
+
+#[test]
+fn deer_are_hunted_with_a_bow_and_arrows_and_butchered_for_meat_and_a_hide() {
+    let mut world = World::default();
+    let pine = Subject::Thing(world.add_thing(tree(PlantSpecies::Pine, 0, 600)));
+    let mut sim = boreal(world, 30, 1);
+    let hunt = Command::Act {
+        verb: Verb::Hunt,
+        subject: pine,
+    };
+    let last = |sim: &Simulation| sim.state.journal.entries().last().map(|e| e.text.clone());
+
+    sim.apply(hunt.clone());
+    assert_eq!(last(&sim).as_deref(), Some("You need a bow for that."));
+    carry(&mut sim, Item::Bow, 1);
+    sim.apply(hunt.clone());
+    assert_eq!(last(&sim).as_deref(), Some("You have no arrows."));
+
+    // Sooner or later an arrow finds its mark, and every hunt costs one.
+    carry(&mut sim, Item::Arrow, 30);
+    let mut hunts = 0;
+    while carried(&sim, Item::DeerCarcass) == 0 {
+        assert!(hunts < 30, "no deer in thirty hunts");
+        sim.state.time = Timestamp::from_seconds(FIRST_MORNING.as_seconds() + 30 * DAY + HOUR);
+        sim.conditions = sim.state.climate.conditions(sim.state.time);
+        sim.apply(hunt.clone());
+        for _ in 0..7_200 {
+            sim.tick();
+        }
+        hunts += 1;
+    }
+    assert_eq!(carried(&sim, Item::Arrow), 30 - hunts);
+
+    carry(&mut sim, Item::Knife, 1);
+    sim.apply(Command::Craft(Recipe::ButcherDeer));
+    for _ in 0..2_700 {
+        sim.tick();
+    }
+    assert_eq!(carried(&sim, Item::DeerCarcass), 0);
+    assert_eq!(carried(&sim, Item::Hide), 1);
+    assert!(sim.at_hand.count(sim.state.player.carried(), Item::RawMeat) >= 30);
+}

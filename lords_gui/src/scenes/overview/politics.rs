@@ -8,7 +8,8 @@ use crate::scenes::count;
 const SECTION_SPACING: f32 = 12.0;
 const BAR_WIDTH: f32 = 160.0;
 const LEAN_WIDTH: f32 = 120.0;
-const SIDE_WIDTH: f32 = 130.0;
+const SIDE_WIDTH: f32 = 180.0;
+const OFFICE_WIDTH: f32 = 260.0;
 
 /// Shows how the settlement is led, where the player character stands in it, what they
 /// hold, and the laws, with the means to change each. Returns what was asked for.
@@ -27,6 +28,12 @@ pub fn show(ui: &mut egui::Ui, view: &View) -> Option<Command> {
     let mut command = None;
 
     leadership(ui, town);
+    if politics.campaigning {
+        ui.label(
+            RichText::new("An election is near. Now is the time to be seen and heard.")
+                .color(ui.visuals().warn_fg_color),
+        );
+    }
     ui.add_space(SECTION_SPACING);
     standing(ui, politics);
     ui.add_space(SECTION_SPACING);
@@ -34,7 +41,10 @@ pub fn show(ui: &mut egui::Ui, view: &View) -> Option<Command> {
     ui.add_space(SECTION_SPACING);
     command = command.or(views(ui, politics));
     ui.add_space(SECTION_SPACING);
-    command = command.or(laws(ui, politics));
+    command = command.or(laws(ui, town));
+    ui.add_space(SECTION_SPACING);
+
+    command = command.or(offices(ui, politics));
     ui.add_space(SECTION_SPACING);
 
     if politics.leads {
@@ -50,6 +60,59 @@ pub fn show(ui: &mut egui::Ui, view: &View) -> Option<Command> {
             command = Some(Command::SetSteward(steward));
         }
     }
+
+    command
+}
+
+/// Shows who holds which office, with the means to give each to someone else.
+fn offices(ui: &mut egui::Ui, politics: &PoliticsView) -> Option<Command> {
+    let mut command = None;
+
+    ui.label(RichText::new("Offices").strong()).on_hover_text(
+        "Whoever leads gives each office to one of the twenty grown-ups people think the \
+         most of. Being given one raises the esteem someone is held in, and what they \
+         think of you.",
+    );
+    egui::Grid::new("offices")
+        .num_columns(2)
+        .min_row_height(ui.spacing().interact_size.y)
+        .spacing(egui::vec2(16.0, 6.0))
+        .show(ui, |ui| {
+            for (office, holder) in &politics.offices {
+                ui.label(office.name()).on_hover_text(office.telling());
+                let held = match holder {
+                    Some((name, true)) => format!("{name}, who suits it"),
+                    Some((name, false)) => name.clone(),
+                    None => "Nobody".to_owned(),
+                };
+                if !politics.leads {
+                    ui.label(RichText::new(held).weak());
+                    ui.end_row();
+                    continue;
+                }
+
+                let mut chosen: Option<Option<lords_sim::people::PersonId>> = None;
+                egui::ComboBox::from_id_salt(("office", *office))
+                    .width(OFFICE_WIDTH)
+                    .selected_text(held)
+                    .show_ui(ui, |ui| {
+                        if ui.selectable_label(holder.is_none(), "Nobody").clicked() {
+                            chosen = Some(None);
+                        }
+                        for (id, words) in &politics.trusted {
+                            if ui.selectable_label(false, words).clicked() {
+                                chosen = Some(Some(*id));
+                            }
+                        }
+                    })
+                    .response
+                    .on_hover_text(office.telling());
+                if let Some(chosen) = chosen {
+                    command = Some(Command::Appoint(*office, chosen));
+                }
+                ui.end_row();
+            }
+        });
 
     command
 }
@@ -70,9 +133,10 @@ fn leadership(ui: &mut egui::Ui, town: &SettlementView) {
     ui.add_space(4.0);
 
     ui.horizontal_wrapped(|ui| {
+        let title = politics.era.title();
         match (&politics.leader, politics.leads) {
-            (_, true) => ui.label(RichText::new("You lead here.").strong()),
-            (Some(leader), false) => ui.label(format!("{leader} leads here.")),
+            (_, true) => ui.label(RichText::new(format!("You are {title} here.")).strong()),
+            (Some(leader), false) => ui.label(format!("{leader} is {title} here.")),
             (None, false) => ui.label("Nobody leads here for now."),
         };
         ui.label(RichText::new(next_moot(politics)).weak());
@@ -144,7 +208,11 @@ fn appeals(ui: &mut egui::Ui, politics: &PoliticsView) -> Option<Command> {
     ui.label(RichText::new("Winning people over").strong());
     ui.horizontal_wrapped(|ui| {
         for appeal in Appeal::ALL {
-            let rest = politics.appeal_rest[appeal as usize];
+            let rest = politics
+                .appeal_rest
+                .get(appeal as usize)
+                .copied()
+                .unwrap_or(0);
             let label = if rest > 0 {
                 format!("{} (in {})", appeal.name(), count(rest, "day"))
             } else {
@@ -193,7 +261,13 @@ fn views(ui: &mut egui::Ui, politics: &PoliticsView) -> Option<Command> {
                 );
                 ui.spacing_mut().slider_width = LEAN_WIDTH;
                 let slider = egui::Slider::new(&mut lean, -2..=2).show_value(false);
-                if ui.add(slider).on_hover_text(issue.name()).changed() {
+                let [ones, neither, others] = politics.leanings[issue as usize];
+                let leanings = format!(
+                    "{}. Of the grown-ups, {ones} hold the one, {others} the other, and \
+                     {neither} neither.",
+                    issue.name()
+                );
+                if ui.add(slider).on_hover_text(leanings).changed() {
                     command = Some(Command::SetView(issue, lean));
                 }
                 ui.label(RichText::new(other).weak());
@@ -204,7 +278,8 @@ fn views(ui: &mut egui::Ui, politics: &PoliticsView) -> Option<Command> {
     command
 }
 
-fn laws(ui: &mut egui::Ui, politics: &PoliticsView) -> Option<Command> {
+fn laws(ui: &mut egui::Ui, town: &SettlementView) -> Option<Command> {
+    let politics = &town.politics;
     let mut command = None;
 
     ui.label(RichText::new("Laws").strong());
@@ -214,13 +289,20 @@ fn laws(ui: &mut egui::Ui, politics: &PoliticsView) -> Option<Command> {
         .min_row_height(ui.spacing().interact_size.y)
         .spacing(egui::vec2(16.0, 6.0))
         .show(ui, |ui| {
-            for law in Law::ALL {
+            for (index, law) in Law::ALL.into_iter().enumerate() {
+                // A law that takes knowing more than is known cannot be thought of yet.
+                let thinkable = law
+                    .needs()
+                    .is_none_or(|needed| town.advances.contains(&needed));
+                if !thinkable {
+                    continue;
+                }
                 let in_force = politics.laws.contains(&law);
                 let name = RichText::new(law.name());
                 ui.label(if in_force { name.strong() } else { name })
                     .on_hover_text(law.effect());
 
-                let ayes = politics.ayes[law as usize];
+                let ayes = politics.ayes.get(index).copied().unwrap_or(0);
                 let mood = format!("{ayes} of {} for it", politics.grown_ups);
                 ui.label(
                     RichText::new(if in_force {
@@ -247,13 +329,17 @@ fn laws(ui: &mut egui::Ui, politics: &PoliticsView) -> Option<Command> {
 }
 
 /// Returns the words for how laws come to be.
-fn lawmaking(politics: &PoliticsView) -> &'static str {
+fn lawmaking(politics: &PoliticsView) -> String {
     if politics.decides_alone {
         "Whoever leads makes the laws without asking anyone. Those a law suits think \
          better of its maker, and the rest worse."
+            .to_owned()
     } else {
-        "A law needs half of the grown-ups for it, and giving one up half of them against \
-         it. Those a law suits think better of its maker, and the rest worse."
+        format!(
+            "A law takes {} of the {} grown-ups for it, and giving one up as many against \
+             it. Those a law suits think better of its maker, and the rest worse.",
+            politics.needed, politics.grown_ups
+        )
     }
 }
 
@@ -285,14 +371,25 @@ pub(super) mod tests {
             ],
             voices: 8,
             laws: vec![Law::OpenGates],
-            ayes: [1, 2, 3, 4, 5, 6, 7, 0],
+            ayes: vec![1, 2, 3, 4, 5, 6, 7, 0, 4, 3, 2, 1, 0, 7, 6, 5],
+            needed: 4,
+            leanings: [[2, 3, 2], [0, 7, 0], [5, 1, 1], [1, 2, 4]],
+            campaigning: !leads,
+            offices: vec![
+                (
+                    lords_sim::politics::Office::Marshal,
+                    Some(("Inka Oja".to_owned(), true)),
+                ),
+                (lords_sim::politics::Office::Treasurer, None),
+            ],
+            trusted: Vec::new(),
             grown_ups: 7,
             decides_alone: false,
             next_moot: Some(120),
             steward: false,
             credit: -6_200,
             views: [0, 1, -2, 2],
-            appeal_rest: [0, 12, 0],
+            appeal_rest: vec![0, 12, 0, 0, 3],
         }
     }
 
@@ -313,7 +410,7 @@ pub(super) mod tests {
     #[test]
     fn lawmaking_is_told_by_who_has_a_say() {
         let mut politics = politics(true);
-        assert!(lawmaking(&politics).starts_with("A law needs half"));
+        assert!(lawmaking(&politics).starts_with("A law takes 4 of the 7 grown-ups"));
         politics.decides_alone = true;
         assert!(lawmaking(&politics).starts_with("Whoever leads makes the laws"));
     }

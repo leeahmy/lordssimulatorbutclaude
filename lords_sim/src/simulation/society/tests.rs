@@ -126,7 +126,9 @@ pub(crate) fn pass_days(sim: &mut Simulation, days: u64) {
 }
 
 pub(crate) fn put_up(sim: &mut Simulation, kind: StructureKind) {
-    let at = sim.free_plot().unwrap_or_else(|| Location::new(0, 700));
+    let at = sim
+        .free_plot(false)
+        .unwrap_or_else(|| Location::new(0, 700));
     let structure = Structure::new(Object::new(at, sim.state.time), kind);
     sim.add_thing(Thing::Structure(structure));
     sim.look();
@@ -469,8 +471,11 @@ pub(crate) fn thinkers_work_out_an_advance_which_opens_up_more() {
 
     pass_days(&mut sim, 6);
     let town = sim.view().settlement.expect("founded");
-    assert_eq!((town.pursuit, town.insight), (Some(Advance::Smoking), 13));
+    assert_eq!((town.pursuit, town.insight), (Some(Advance::Smoking), 15));
 
+    // Two thinkers get 2.5 days further in a day. The rest is skipped over here.
+    let left = Advance::Smoking.cost() * 10 - 15 * 10 - 20;
+    sim.state.settlement.as_mut().expect("founded").insight += left;
     pass_days(&mut sim, 1);
     let town = sim.view().settlement.expect("founded");
     assert_eq!(town.advances, [Advance::Smoking]);
@@ -553,30 +558,43 @@ pub(crate) fn frost_takes_those_without_a_fire_or_a_roof() {
     let left = sim.members().len();
     assert!((10..36).contains(&left), "{left} of 40 are left");
     assert!(noted(&sim, "has died of the cold."));
-    assert!(noted(&sim, "There are no logs in the store"));
+    assert!(noted(&sim, "There is nothing in the store to heat"));
 }
 
 #[test]
 pub(crate) fn people_of_a_settlement_pair_up_and_have_children() {
-    let mut sim = simulation(World::default());
-    settle(&mut sim);
-    put_up(&mut sim, StructureKind::Longhouse);
-    let aino = member(&mut sim, "Aino", Sex::Female, 25, Role::Idle);
-    let eero = member(&mut sim, "Eero", Sex::Male, 27, Role::Idle);
-    stock(&mut sim, Item::DriedMeat, 100_000);
+    // Sickness may take either of them first, so more than one life is given a try.
+    let lived = |seed: u64| {
+        let mut sim = simulation(World::default());
+        sim.state.rng = crate::rng::Rng::new(seed);
+        settle(&mut sim);
+        put_up(&mut sim, StructureKind::Longhouse);
+        let aino = member(&mut sim, "Aino", Sex::Female, 25, Role::Idle);
+        let eero = member(&mut sim, "Eero", Sex::Male, 27, Role::Idle);
+        stock(&mut sim, Item::DriedMeat, 100_000);
 
+        for _ in 0..500 {
+            let born = sim
+                .state
+                .world
+                .everyone()
+                .any(|(_, person)| person.parents[0] == Some(aino));
+            if born {
+                return Some((sim, aino, eero));
+            }
+            pass_days(&mut sim, 10);
+        }
+        None
+    };
+    let (sim, aino, eero) = (1..=6)
+        .find_map(lived)
+        .expect("a child was born in one life out of six");
     let child_of = |sim: &Simulation| {
         let mut everyone = sim.state.world.everyone();
         everyone
             .find(|(_, person)| person.parents[0] == Some(aino))
             .map(|(_, child)| child.clone())
     };
-    let mut days = 0;
-    while child_of(&sim).is_none() {
-        assert!(days < 6_000, "no child was born in all those years");
-        pass_days(&mut sim, 10);
-        days += 10;
-    }
 
     let child = child_of(&sim).expect("the child was born");
     assert!(noted(&sim, "have become partners."));

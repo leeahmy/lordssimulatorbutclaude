@@ -4,9 +4,9 @@
 use crate::item::{Item, Stack};
 use crate::journal::Tone;
 use crate::object::Living;
-use crate::people::{ADULT_AGE, Person, PersonId, Role};
-use crate::politics::{Appeal, Era, FIRMEST, Issue, Law, Views, agreement};
-use crate::settlement::{Advance, BUILDINGS, FARMERS_PER_FIELD};
+use crate::people::{ADULT_AGE, Person, PersonId, Role, Trait};
+use crate::politics::{Appeal, Civics, Era, FIRMEST, Issue, Law, Office, Views, agreement};
+use crate::settlement::Advance;
 use crate::time::Timestamp;
 use crate::time::gregorian::{Date, SECONDS_PER_DAY, is_leap_year};
 use crate::view::{Candidate, PoliticsView};
@@ -38,7 +38,7 @@ const LOYAL: u8 = 40;
 const NOTICEABLE: i64 = 5_000;
 
 /// What an hour of work on a building of the settlement is worth.
-const HOUR_OF_WORK: i64 = 1_500;
+pub(super) const HOUR_OF_WORK: i64 = 1_500;
 
 /// The kilocalories of food it takes to feast one person.
 const FEAST_FARE: u32 = 1_500;
@@ -48,31 +48,15 @@ const FEAST_FARE: u32 = 1_500;
 pub(super) const HIRE_FARE: u32 = 12_500;
 pub(super) const HIRE_DAYS: u64 = 10;
 
+/// The coins someone asks for it instead where there is coin.
+pub(super) const HIRE_COINS: i64 = 60;
+
 /// How many days of food there must be in the store for whoever leads to be well thought
 /// of.
 const LEAN_DAYS: u32 = 5;
 
-/// How many days of food there must be in the store before anyone is spared from finding
-/// more of it, in the half of the year when food is easily found and in the half when
-/// the winter has to be laid in for, and how many more before anyone is set to thinking.
-const SPARE_DAYS: (u32, u32) = (15, 45);
-const THINKING_DAYS: u32 = 30;
-
 /// The esteem someone has to be held in to be named at a moot.
 const NAMEABLE: u8 = 35;
-
-/// The order in which a settlement left to itself works things out.
-const CUSTOMARY_PURSUITS: [Advance; 9] = [
-    Advance::Smoking,
-    Advance::Pottery,
-    Advance::Farming,
-    Advance::Boats,
-    Advance::Weaving,
-    Advance::Herbalism,
-    Advance::Masonry,
-    Advance::Writing,
-    Advance::Ironworking,
-];
 
 impl Simulation {
     /// Returns whether the player character leads the settlement.
@@ -119,16 +103,15 @@ impl Simulation {
         let Some(settlement) = &self.state.settlement else {
             return Era::Band;
         };
-        let hall = self
-            .structures()
-            .iter()
-            .any(|(_, kind)| *kind == StructureKind::Hall);
+        let town_hall = self.has_built(StructureKind::TownHall);
 
-        Era::of(
-            self.members().len() as u32 + 1,
-            settlement.knows(Advance::Writing),
-            hall,
-        )
+        Era::of(Civics {
+            people: self.members().len() as u32 + 1,
+            writing: settlement.knows(Advance::Writing),
+            hall: town_hall || self.has_built(StructureKind::Hall),
+            charter: town_hall && settlement.knows(Advance::Law),
+            power: self.has_built(StructureKind::PowerStation),
+        })
     }
 
     fn my_views(&self) -> Views {
@@ -145,19 +128,18 @@ impl Simulation {
     }
 
     /// Returns the grown-ups of the settlement apart from the player character.
-    fn grown_ups(&self) -> Vec<(PersonId, Person)> {
+    fn grown_ups(&self) -> Vec<(PersonId, &Person)> {
         let now = self.state.time;
         self.state
             .world
             .people()
             .filter(|(_, person)| person.member && person.is_adult(now))
-            .map(|(id, person)| (id, person.clone()))
             .collect()
     }
 
     /// Returns who could lead: the player character, whoever leads now, and the two held
     /// in the highest esteem.
-    fn candidates(&self, grown_ups: &[(PersonId, Person)]) -> Vec<PersonId> {
+    fn candidates(&self, grown_ups: &[(PersonId, &Person)]) -> Vec<PersonId> {
         let me = self.state.world.protagonist();
         let leader = self.state.settlement.as_ref().and_then(|s| s.leader);
         let mut candidates = Vec::new();
@@ -168,7 +150,7 @@ impl Simulation {
         if let Some(leader) = leader.filter(|leader| grown_ups.iter().any(|(id, _)| id == leader)) {
             candidates.push(leader);
         }
-        let mut esteemed: Vec<&(PersonId, Person)> = grown_ups.iter().collect();
+        let mut esteemed: Vec<&(PersonId, &Person)> = grown_ups.iter().collect();
         esteemed.sort_by_key(|(id, person)| (std::cmp::Reverse(person.esteem), *id));
         for (id, person) in esteemed.into_iter().take(2) {
             if !candidates.contains(id) && person.esteem >= NAMEABLE {
@@ -221,7 +203,9 @@ impl Simulation {
         let mut ballots: Vec<(PersonId, PersonId)> = grown_ups
             .iter()
             .map(|(id, voter)| {
-                let choice = if candidates.contains(id) {
+                // Whoever leads speaks for themselves. Anyone else who is named thinks
+                // well of themselves, but stands aside for someone they think more of.
+                let choice = if Some(*id) == leader && candidates.contains(id) {
                     *id
                 } else {
                     candidates
@@ -230,7 +214,12 @@ impl Simulation {
                         .max_by_key(|candidate| {
                             // The first named wins a tie.
                             let order = candidates.iter().position(|c| c == candidate);
-                            (standing(voter, *id, *candidate), std::cmp::Reverse(order))
+                            let regard = if candidate == id {
+                                i32::from(voter.esteem) + KINSHIP
+                            } else {
+                                standing(voter, *id, *candidate)
+                            };
+                            (regard, std::cmp::Reverse(order))
                         })
                         .unwrap_or(*id)
                 };
@@ -269,6 +258,7 @@ impl Simulation {
     pub(super) fn hold_moot(&mut self) {
         let me = self.state.world.protagonist();
         let year = Date::from_timestamp(self.state.time).year();
+        let era = self.era();
         let tally = self.tally();
         let voices: u32 = tally.iter().map(|(_, voices)| voices).sum();
         let mine = tally
@@ -281,6 +271,8 @@ impl Simulation {
         let before = settlement.leader;
         let place = settlement.name.clone();
         settlement.moot_year = year;
+        // What the one chosen is called: a leader, a headman, or a mayor.
+        let leader = era.title();
         self.society_stale = true;
 
         let Some((chosen, won)) = tally.first().copied() else {
@@ -288,15 +280,28 @@ impl Simulation {
             return;
         };
         settlement.leader = Some(chosen);
+        // Custom keeps running things under a new leader until they say otherwise.
+        if Some(chosen) == me && before != me {
+            settlement.steward = true;
+        }
         if voices <= 1 {
             return;
         }
 
+        if before != Some(chosen) {
+            let name = self.state.world.person(chosen).map(|p| p.name.full());
+            self.chronicle(format!(
+                "{} was chosen as {leader}.",
+                name.unwrap_or_default()
+            ));
+        }
         if Some(chosen) == me {
             let words = if before == me {
-                format!("The moot keeps you as leader of {place}, with {won} of {voices} voices.")
+                format!("The moot keeps you as {leader} of {place}, with {won} of {voices} voices.")
             } else {
-                format!("The moot chooses you to lead {place}, with {won} of {voices} voices.")
+                format!(
+                    "The moot chooses you as {leader} of {place}, with {won} of {voices} voices."
+                )
             };
             self.alert = true;
             self.note(Tone::Good, words);
@@ -312,7 +317,7 @@ impl Simulation {
             self.note(
                 tone,
                 format!(
-                    "The moot {kept} {name} as leader of {place}, with {won} of {voices} \
+                    "The moot {kept} {name} as {leader} of {place}, with {won} of {voices} \
                      voices. You had {mine}."
                 ),
             );
@@ -337,18 +342,33 @@ impl Simulation {
             !present || (Some(leader) == me && self.state.death.is_some())
         });
         let for_life = settlement.lives_by(Law::EldersWord);
-        let term = if settlement.lives_by(Law::OpenMoot) {
-            1
-        } else {
-            era.term()
-        };
+        let term = self.term(era);
         let due = date.year() >= settlement.moot_year + term && !for_life;
         let place = settlement.name.clone();
+        let heir = if leader_gone && settlement.lives_by(Law::Birthright) {
+            settlement.leader.and_then(|late| self.heir_of(late))
+        } else {
+            None
+        };
 
+        // A settlement that has grown into something more remembers the day.
+        let reached = era as u8;
+        if let Some(settlement) = &mut self.state.settlement
+            && reached > settlement.era_reached
+        {
+            settlement.era_reached = reached;
+            let place = settlement.name.clone();
+            self.alert = true;
+            let words = format!("{place} has become a {}.", era.name().to_lowercase());
+            self.note(Tone::Good, words.clone());
+            self.chronicle(words);
+        }
         self.esteem_day(date.ordinal());
-        if leader_gone || (due && date.ordinal() == MOOT_DAY) {
+        if let Some(heir) = heir {
+            self.succeed(heir);
+        } else if leader_gone || (due && date.ordinal() == MOOT_DAY) {
             self.hold_moot();
-        } else if due && era == Era::Town && date.ordinal() == CALLING_DAY {
+        } else if due && era.campaigns() && date.ordinal() == CALLING_DAY {
             self.alert = true;
             self.note(
                 Tone::Plain,
@@ -369,6 +389,166 @@ impl Simulation {
         }
         if !self.leads() && date.ordinal() == LAWGIVING_DAY {
             self.give_laws();
+            self.fill_offices();
+        }
+    }
+
+    /// Returns how much the office does for the settlement: nothing if nobody holds it,
+    /// one if someone does, and two if they are of the kind that holds it best.
+    pub(super) fn office(&self, office: Office) -> u32 {
+        let now = self.state.time;
+        let holder = self.state.settlement.as_ref().and_then(|settlement| {
+            let held = settlement.offices.iter().find(|(held, _)| *held == office);
+            held.map(|(_, holder)| *holder)
+        });
+        let holder = holder
+            .and_then(|holder| self.state.world.person(holder))
+            .filter(|holder| holder.is_present() && holder.member && holder.is_adult(now));
+
+        match holder {
+            None => 0,
+            Some(holder) if holder.has(office.suits()) => 2,
+            Some(_) => 1,
+        }
+    }
+
+    /// Returns the grown-ups held in the highest esteem, who could be given an office.
+    fn trusted(&self) -> Vec<(PersonId, &Person)> {
+        let mut grown_ups = self.grown_ups();
+        grown_ups.sort_by_key(|(id, person)| (std::cmp::Reverse(person.esteem), *id));
+        grown_ups.truncate(20);
+        grown_ups
+    }
+
+    /// Gives `office` to the person, or takes it from whoever holds it, if the player
+    /// leads.
+    pub(super) fn appoint(&mut self, office: Office, holder: Option<PersonId>) {
+        if let Err(reason) = self.authority() {
+            self.note(Tone::Plain, reason);
+            return;
+        }
+        let eligible =
+            holder.is_none_or(|holder| self.trusted().iter().any(|(id, _)| *id == holder));
+        if !eligible {
+            self.note(
+                Tone::Plain,
+                "An office goes to someone grown whom people think well of.",
+            );
+            return;
+        }
+        self.install(office, holder, true);
+    }
+
+    fn install(&mut self, office: Office, holder: Option<PersonId>, by_player: bool) {
+        let Some(settlement) = &mut self.state.settlement else {
+            return;
+        };
+        // Nobody holds two offices.
+        settlement
+            .offices
+            .retain(|(held, other)| *held != office && Some(*other) != holder);
+        self.society_stale = true;
+        let Some(holder) = holder else {
+            return;
+        };
+        settlement.offices.push((office, holder));
+        let Some(person) = self.state.world.person_mut(holder) else {
+            return;
+        };
+        person.esteem = person.esteem.saturating_add(5).min(100);
+        if by_player {
+            person.warm_to(10);
+        }
+        let name = person.name.full();
+        let title = office.name().to_lowercase();
+        self.note(Tone::Plain, format!("{name} is made {title}."));
+        self.chronicle(format!("{name} was made {title}."));
+    }
+
+    /// Has a leader who is not the player give the offices nobody holds to those who
+    /// suit them best among those people think well of.
+    fn fill_offices(&mut self) {
+        if self.era() == Era::Band {
+            return;
+        }
+        for office in Office::ALL {
+            if self.office(office) > 0 {
+                continue;
+            }
+            let held: Vec<PersonId> = self
+                .state
+                .settlement
+                .as_ref()
+                .map_or_else(Vec::new, |s| s.offices.iter().map(|(_, id)| *id).collect());
+            let trusted = self.trusted();
+            let free = || trusted.iter().filter(|(id, _)| !held.contains(id));
+            let pick = free()
+                .find(|(_, person)| person.has(office.suits()))
+                .or_else(|| free().next())
+                .map(|(id, _)| *id);
+            if pick.is_some() {
+                self.install(office, pick, false);
+            }
+        }
+    }
+
+    /// Returns how many years pass between the choosing of leaders in a settlement of
+    /// `era`, by the laws it lives by.
+    fn term(&self, era: Era) -> u64 {
+        if self.lives_by(Law::OpenMoot) {
+            1
+        } else if self.lives_by(Law::Assembly) {
+            2
+        } else {
+            era.term()
+        }
+    }
+
+    /// Returns the eldest grown child of `late` who lives in the settlement.
+    fn heir_of(&self, late: PersonId) -> Option<PersonId> {
+        let now = self.state.time;
+        let world = &self.state.world;
+        let me = world.protagonist();
+        let alive = self.state.death.is_none();
+
+        world
+            .everyone()
+            .filter(|(id, person)| {
+                let here = person.is_present() && (person.member || Some(*id) == me);
+                here && (Some(*id) != me || alive)
+            })
+            .filter(|(_, person)| person.parents.contains(&Some(late)) && person.is_adult(now))
+            .min_by_key(|(id, person)| (person.born, *id))
+            .map(|(id, _)| id)
+    }
+
+    /// Has `heir` lead after their parent, as is their birthright.
+    fn succeed(&mut self, heir: PersonId) {
+        let me = self.state.world.protagonist();
+        let year = Date::from_timestamp(self.state.time).year();
+        let name = self.state.world.person(heir).map(|heir| heir.name.full());
+        let Some(settlement) = &mut self.state.settlement else {
+            return;
+        };
+        settlement.leader = Some(heir);
+        settlement.moot_year = year;
+        let place = settlement.name.clone();
+        self.society_stale = true;
+
+        if Some(heir) == me {
+            self.alert = true;
+            self.note(
+                Tone::Good,
+                format!("By birthright, you lead {place} after your parent."),
+            );
+        } else {
+            self.note(
+                Tone::Plain,
+                format!(
+                    "By birthright, {} leads {place} after their parent.",
+                    name.unwrap_or_default()
+                ),
+            );
         }
     }
 
@@ -379,7 +559,13 @@ impl Simulation {
         let leader = self.state.settlement.as_ref().and_then(|s| s.leader);
         let members = self.members();
         let fed = self.food_days(members.len() + 1) >= LEAN_DAYS;
-        let campaigning = self.era() == Era::Town && (CALLING_DAY..MOOT_DAY).contains(&day_of_year);
+        let campaigning = self.era().campaigns() && (CALLING_DAY..MOOT_DAY).contains(&day_of_year);
+        // Whoever leads is thought of by how content people are with their lot.
+        let mood = self
+            .state
+            .settlement
+            .as_ref()
+            .map_or(0, |settlement| (i32::from(settlement.contentment) - 50) / 4);
 
         for id in members {
             let Some(person) = self.state.world.person_mut(id) else {
@@ -392,11 +578,21 @@ impl Simulation {
             let age = person.age(now).min(60) as i32;
             let mut due = 15 + age / 3 + (id.0 * 7 % 15) as i32;
             due += match person.role {
-                Role::Builder | Role::Crafter | Role::Thinker => 5,
+                Role::Builder | Role::Crafter | Role::Thinker | Role::Smith => 5,
+                Role::Healer | Role::Teacher | Role::Clerk | Role::Merchant => 8,
+                Role::Scholar => 10,
                 _ => 0,
             };
+            if person.has(Trait::Kind) || person.has(Trait::Easygoing) {
+                due += 8;
+            }
+            if person.has(Trait::Stern) {
+                due -= 4;
+            }
+            due += i32::from(person.skill / 10);
             if Some(id) == leader {
                 due += if fed { 10 } else { -10 };
+                due += mood;
             }
             if campaigning && day_of_year.is_multiple_of(2) {
                 due += 10;
@@ -411,15 +607,25 @@ impl Simulation {
     fn ayes(&self, law: Law) -> (u32, u32) {
         let issue = law.issue() as usize;
         let grown_ups = self.grown_ups();
+        let leads = self.leads();
         let ayes = grown_ups
             .iter()
             .filter(|(_, person)| {
                 let lean = person.views[issue] * law.side();
-                lean > 0 || (lean == 0 && self.leads() && person.regard >= LOYAL)
+                lean > 0 || (lean == 0 && leads && person.regard >= LOYAL)
             })
             .count();
 
         (ayes as u32, grown_ups.len() as u32)
+    }
+
+    /// Returns how many voices out of `voices` a law takes to be made or given up.
+    fn needed_voices(&self, voices: u32) -> u32 {
+        if self.lives_by(Law::Assembly) {
+            (voices * 2).div_ceil(3)
+        } else {
+            voices.div_ceil(2)
+        }
     }
 
     /// Returns whether whoever leads makes the laws without asking anyone.
@@ -437,10 +643,20 @@ impl Simulation {
         if self.lives_by(law) == wanted {
             return;
         }
+        if let Some(needed) = law.needs().filter(|needed| !self.knows_advance(*needed)) {
+            self.note(
+                Tone::Plain,
+                format!(
+                    "Nobody can make sense of such a law before {} is known.",
+                    needed.name().to_lowercase()
+                ),
+            );
+            return;
+        }
 
         let (ayes, voices) = self.ayes(law);
         let ayes = if wanted { ayes } else { voices - ayes };
-        if !self.decides_alone() && ayes * 2 < voices {
+        if !self.decides_alone() && ayes < self.needed_voices(voices) {
             let what = if wanted { "have" } else { "give up" };
             self.note(
                 Tone::Bad,
@@ -464,6 +680,11 @@ impl Simulation {
                 }
             }
         }
+        self.chronicle(if wanted {
+            format!("{} became the law.", law.name())
+        } else {
+            format!("{} was the law no longer.", law.name())
+        });
         let words = if wanted {
             format!("{} is now the law. {}.", law.name(), law.effect())
         } else {
@@ -495,11 +716,12 @@ impl Simulation {
 
         for law in Law::ALL {
             let firm = leader.views[law.issue() as usize] * law.side() == FIRMEST;
-            if !firm || self.lives_by(law) {
+            let thinkable = law.needs().is_none_or(|needed| self.knows_advance(needed));
+            if !firm || !thinkable || self.lives_by(law) || self.lives_by(law.opposite()) {
                 continue;
             }
             let (ayes, voices) = self.ayes(law);
-            if self.decides_alone() || ayes * 2 >= voices {
+            if self.decides_alone() || ayes >= self.needed_voices(voices) {
                 self.put_in_force(law, true);
                 self.note(
                     Tone::Plain,
@@ -579,7 +801,8 @@ impl Simulation {
             .state
             .settlement
             .as_ref()
-            .and_then(|settlement| settlement.appealed_on[appeal as usize]);
+            .and_then(|settlement| settlement.appealed_on.get(appeal as usize).copied())
+            .flatten();
 
         last.map_or(0, |last| (last + appeal.rest_days()).saturating_sub(today))
     }
@@ -603,13 +826,21 @@ impl Simulation {
                 "People have had enough of that for now. Wait {rest} more days."
             ));
         }
+        let coins = appeal.coins();
+        if coins > self.state.purse {
+            return Err(format!(
+                "That costs {coins} coins, and you have {}.",
+                self.state.purse.max(0)
+            ));
+        }
         match appeal {
             Appeal::Speech => Ok(()),
             Appeal::Feast => {
-                let (needed, had) = (FEAST_FARE * members, self.own_food());
+                let guests = members.min(Appeal::TABLE);
+                let (needed, had) = (FEAST_FARE * guests, self.own_food());
                 if had < needed {
                     Err(format!(
-                        "A feast for {members} takes {needed} kcal of your own food, carried \
+                        "A feast for {guests} takes {needed} kcal of your own food, carried \
                          or piled up here. You have {had}."
                     ))
                 } else {
@@ -619,10 +850,17 @@ impl Simulation {
             Appeal::Notices if !settlement.knows(Advance::Writing) => {
                 Err("Nobody here can read or write yet.".to_owned())
             }
-            Appeal::Notices if self.has(Item::BirchBark) < 5 => {
-                Err("Notices take 5 pieces of birch bark to write on.".to_owned())
-            }
+            Appeal::Notices if self.has(Item::BirchBark) < 5 && self.has(Item::Paper) < 5 => Err(
+                "Notices take 5 pieces of birch bark or sheets of paper to write on.".to_owned(),
+            ),
             Appeal::Notices => Ok(()),
+            Appeal::Newspaper if !self.has_built(StructureKind::PrintingHouse) => {
+                Err("There is no printing house to print a newspaper.".to_owned())
+            }
+            Appeal::Broadcast if !self.has_built(StructureKind::BroadcastingHouse) => {
+                Err("There is no broadcasting house to speak from.".to_owned())
+            }
+            Appeal::Newspaper | Appeal::Broadcast => Ok(()),
         }
     }
 
@@ -632,18 +870,39 @@ impl Simulation {
         let now = self.state.time;
         let mine = self.my_views();
         let members = self.members();
+        let literacy = self
+            .state
+            .settlement
+            .as_ref()
+            .map_or(0, |settlement| u32::from(settlement.literacy));
+        let televised = self.knows_advance(Advance::Television);
         if let Some(settlement) = &mut self.state.settlement {
-            settlement.appealed_on[appeal as usize] = Some(today);
+            let slot = appeal as usize;
+            if settlement.appealed_on.len() <= slot {
+                settlement.appealed_on.resize(slot + 1, None);
+            }
+            settlement.appealed_on[slot] = Some(today);
         }
+        if appeal.coins() > 0 {
+            self.charge(appeal.coins());
+        }
+        // Who of many is reached is settled by the day, so that it is not always the same.
+        let reached = |id: PersonId, most: u32| {
+            let every = (members.len() as u32).div_ceil(most).max(1);
+            (u64::from(id.0) + today).is_multiple_of(u64::from(every))
+        };
+        // Who can read is as good as settled by birth, and the more can the more learn to.
+        let reads = |id: PersonId| id.0 * 37 % 100 < literacy.max(10);
 
         match appeal {
             Appeal::Speech => {
                 let (mut won, mut lost) = (0, 0);
                 for id in &members {
+                    let heard = reached(*id, Appeal::CROWD);
                     let Some(person) = self.state.world.person_mut(*id) else {
                         continue;
                     };
-                    if !person.is_adult(now) {
+                    if !person.is_adult(now) || !heard {
                         continue;
                     }
                     match agreement(&person.views, &mine) {
@@ -667,23 +926,33 @@ impl Simulation {
                 );
             }
             Appeal::Feast => {
-                self.spend_own_food(FEAST_FARE * members.len() as u32);
+                let guests = (members.len() as u32).min(Appeal::TABLE);
+                self.spend_own_food(FEAST_FARE * guests);
                 for id in &members {
-                    if let Some(person) = self.state.world.person_mut(*id) {
+                    let fed = reached(*id, Appeal::TABLE);
+                    if let Some(person) = self.state.world.person_mut(*id)
+                        && fed
+                    {
                         person.warm_to(8);
                         person.hungry_days = 0;
                     }
                 }
                 self.note(
                     Tone::Good,
-                    "You lay out a feast. Everyone eats their fill, and remembers who fed them.",
+                    "You lay out a feast. Everyone at it eats their fill, and remembers who \
+                     fed them.",
                 );
             }
             Appeal::Notices => {
-                self.use_up(Item::BirchBark, 5);
+                if self.has(Item::BirchBark) >= 5 {
+                    self.use_up(Item::BirchBark, 5);
+                } else {
+                    self.use_up(Item::Paper, 5);
+                }
                 for id in &members {
                     if let Some(person) = self.state.world.person_mut(*id)
                         && person.is_adult(now)
+                        && reads(*id)
                     {
                         person.warm_to(2);
                     }
@@ -691,6 +960,38 @@ impl Simulation {
                 self.note(
                     Tone::Plain,
                     "You put up notices of what you stand for where everyone passes.",
+                );
+            }
+            Appeal::Newspaper => {
+                for id in &members {
+                    if let Some(person) = self.state.world.person_mut(*id)
+                        && person.is_adult(now)
+                        && reads(*id)
+                    {
+                        let like_minded = agreement(&person.views, &mine) >= 2;
+                        person.warm_to(if like_minded { 4 } else { 2 });
+                    }
+                }
+                self.note(
+                    Tone::Plain,
+                    "What you stand for is in the newspaper for everyone who reads to see.",
+                );
+            }
+            Appeal::Broadcast => {
+                for id in &members {
+                    if let Some(person) = self.state.world.person_mut(*id)
+                        && person.is_adult(now)
+                    {
+                        person.warm_to(if televised { 4 } else { 2 });
+                    }
+                }
+                self.note(
+                    Tone::Plain,
+                    if televised {
+                        "You speak to everyone at once, and they see you as you do."
+                    } else {
+                        "You speak over the air, and are heard in every house."
+                    },
                 );
             }
         }
@@ -774,6 +1075,15 @@ impl Simulation {
             Err(format!("{first} is too young for that."))
         } else if person.hired_until.is_some_and(|until| until > now) {
             Err(format!("{first} is thinking for you already."))
+        } else if self.monetized() {
+            if self.state.purse < HIRE_COINS {
+                Err(format!(
+                    "{first} asks {HIRE_COINS} coins for {HIRE_DAYS} days of it. You have {}.",
+                    self.state.purse.max(0)
+                ))
+            } else {
+                Ok(())
+            }
         } else if carried < HIRE_FARE {
             Err(format!(
                 "{first} asks {HIRE_DAYS} days' keep for it: {HIRE_FARE} kcal of food out of \
@@ -786,7 +1096,12 @@ impl Simulation {
 
     pub(super) fn finish_hire(&mut self, id: PersonId) -> bool {
         let now = self.state.time;
-        super::society::eat(self.state.player.carried_mut(), HIRE_FARE);
+        let paid_in_coin = self.monetized();
+        if paid_in_coin {
+            self.state.purse -= HIRE_COINS;
+        } else {
+            super::society::eat(self.state.player.carried_mut(), HIRE_FARE);
+        }
         let Some(person) = self.state.world.person_mut(id) else {
             return false;
         };
@@ -798,147 +1113,13 @@ impl Simulation {
         self.society_stale = true;
         self.note(
             Tone::Good,
-            format!("{first} takes your food, and will think for you for {HIRE_DAYS} days."),
+            if paid_in_coin {
+                format!("{first} takes your coins, and will think for you for {HIRE_DAYS} days.")
+            } else {
+                format!("{first} takes your food, and will think for you for {HIRE_DAYS} days.")
+            },
         );
         true
-    }
-
-    /// Runs the settlement the way it runs itself: sees to it that enough people find
-    /// food, that what is needed gets built, and that something is being worked out.
-    fn govern(&mut self) {
-        let now = self.state.time;
-        let date = Date::from_timestamp(now);
-        let working_age = self.working_age();
-        let members = self.members();
-        let workers: Vec<PersonId> = members
-            .iter()
-            .copied()
-            .filter(|id| {
-                let person = self.state.world.person(*id);
-                person.is_some_and(|person| person.age(now) >= working_age)
-            })
-            .collect();
-        let hands = workers.len() as u32;
-        let people = members.len() as u32 + 1;
-        let food_days = self.food_days(people as usize);
-        let kinds: Vec<StructureKind> = self.structures().into_iter().map(|(_, k)| k).collect();
-        let count = |kind| kinds.iter().filter(|built| **built == kind).count() as u32;
-        let store = self.store().cloned().unwrap_or_default();
-        let Some(settlement) = &self.state.settlement else {
-            return;
-        };
-        // From August to February the winter is laid in for.
-        let spare = if (3..8).contains(&date.month()) {
-            SPARE_DAYS.0
-        } else {
-            SPARE_DAYS.1
-        };
-        let lean = food_days < spare;
-        let building = count(StructureKind::Site) > 0;
-        let unclothed = members.iter().any(|id| {
-            let person = self.state.world.person(*id);
-            person.is_some_and(|person| !person.clothed)
-        });
-        let growing = (121..=258).contains(&date.ordinal());
-        let berries = crate::world::PlantSpecies::Bilberry.is_ripe(date)
-            || crate::world::PlantSpecies::Lingonberry.is_ripe(date);
-
-        // Who does what, the most pressing first.
-        let mut wanted: Vec<Role> = Vec::new();
-        let mut want = |role: Role, many: u32| wanted.extend((0..many).map(|_| role));
-        if hands >= 3 {
-            want(Role::Woodcutter, 1);
-        }
-        if !lean {
-            if building {
-                want(Role::Builder, (hands / 5).max(1));
-            }
-            if unclothed && store.count(Item::HarePelt) >= 4 {
-                want(Role::Crafter, 1);
-            }
-            if hands >= 5 {
-                want(Role::Gatherer, hands / 8 + 1);
-            }
-            if food_days >= spare + THINKING_DAYS && settlement.pursuit.is_some() {
-                want(Role::Thinker, hands / 6);
-            }
-        }
-        if growing {
-            let room = count(StructureKind::Field) * FARMERS_PER_FIELD;
-            want(Role::Farmer, room.min(hands / 3));
-        }
-        let finders = [
-            Role::Trapper,
-            Role::Fisher,
-            if berries { Role::Forager } else { Role::Fisher },
-        ];
-        for (index, id) in workers.iter().enumerate() {
-            let role = wanted
-                .get(index)
-                .copied()
-                .unwrap_or(finders[index % finders.len()]);
-            if let Some(person) = self.state.world.person_mut(*id)
-                && person.role != role
-            {
-                person.role = role;
-                self.society_stale = true;
-            }
-        }
-
-        // What to work out, if nothing is.
-        let pursuit = CUSTOMARY_PURSUITS
-            .into_iter()
-            .find(|advance| settlement.can_pursue(*advance));
-        if settlement.pursuit.is_none()
-            && let Some(pursuit) = pursuit
-            && let Some(settlement) = &mut self.state.settlement
-        {
-            settlement.pursuit = Some(pursuit);
-            settlement.insight = 0;
-            self.society_stale = true;
-        }
-
-        // What to build, one thing at a time.
-        if building || lean {
-            return;
-        }
-        let knows = |advance| {
-            let settlement = self.state.settlement.as_ref();
-            settlement.is_some_and(|settlement| settlement.knows(advance))
-        };
-        let housing = self.housing();
-        let wants = |kind: StructureKind| match kind {
-            StructureKind::Hut => housing < people,
-            StructureKind::Longhouse => housing + 4 < people,
-            StructureKind::Field => count(kind) * FARMERS_PER_FIELD < hands / 3,
-            StructureKind::Hall => people >= Era::VILLAGE && count(kind) == 0,
-            _ => count(kind) == 0,
-        };
-        let order = [
-            StructureKind::Hut,
-            StructureKind::Smokehouse,
-            StructureKind::Storehouse,
-            StructureKind::Field,
-            StructureKind::Workshop,
-            StructureKind::Dock,
-            StructureKind::Kiln,
-            StructureKind::Hall,
-            StructureKind::Well,
-            StructureKind::Smithy,
-        ];
-        let next = order.into_iter().find(|kind| {
-            let plan = BUILDINGS.iter().find(|plan| plan.kind == *kind);
-            plan.is_some_and(|plan| {
-                let stocked = plan
-                    .materials
-                    .iter()
-                    .all(|(item, count)| store.count(*item) >= *count);
-                wants(*kind) && plan.needs.is_none_or(knows) && stocked
-            })
-        });
-        if let Some(kind) = next {
-            let _ = self.mark_out(kind);
-        }
     }
 
     /// Returns what the player is shown of how the settlement is led.
@@ -952,11 +1133,14 @@ impl Simulation {
         let voices = tally.iter().map(|(_, voices)| voices).sum();
 
         let for_life = settlement.lives_by(Law::EldersWord);
-        let term = if settlement.lives_by(Law::OpenMoot) {
-            1
-        } else {
-            era.term()
-        };
+        let term = self.term(era);
+        let now = self.state.time;
+        let mut leanings = [[0u32; 3]; 4];
+        for (_, person) in world.people().filter(|(_, p)| p.member && p.is_adult(now)) {
+            for (issue, lean) in person.views.iter().enumerate() {
+                leanings[issue][(lean.signum() + 1) as usize] += 1;
+            }
+        }
         let next_moot = (!for_life).then(|| {
             let mut year = (settlement.moot_year + term).max(date.year());
             if year == date.year() && date.ordinal() > MOOT_DAY {
@@ -987,14 +1171,50 @@ impl Simulation {
                 .collect(),
             voices,
             laws: settlement.laws.clone(),
-            ayes: Law::ALL.map(|law| self.ayes(law).0),
+            ayes: Law::ALL.iter().map(|law| self.ayes(*law).0).collect(),
+            needed: self.needed_voices(self.grown_ups().len() as u32),
+            leanings,
+            offices: Office::ALL
+                .into_iter()
+                .map(|office| {
+                    let held = settlement.offices.iter().find(|(held, _)| *held == office);
+                    let holder = held
+                        .and_then(|(_, holder)| world.person(*holder))
+                        .filter(|holder| holder.is_present() && holder.member)
+                        .map(|holder| (holder.name.full(), holder.has(office.suits())));
+                    (office, holder)
+                })
+                .collect(),
+            trusted: self
+                .trusted()
+                .into_iter()
+                .map(|(id, person)| {
+                    let traits: Vec<&str> = person.traits.iter().map(|t| t.name()).collect();
+                    let words = if traits.is_empty() {
+                        person.name.full()
+                    } else {
+                        format!(
+                            "{} ({})",
+                            person.name.full(),
+                            traits.join(", ").to_lowercase()
+                        )
+                    };
+                    (id, words)
+                })
+                .collect(),
+            campaigning: era.campaigns()
+                && (CALLING_DAY..MOOT_DAY).contains(&date.ordinal())
+                && next_moot.is_some_and(|days| days < 40),
             grown_ups: self.grown_ups().len() as u32,
             decides_alone: self.decides_alone(),
             next_moot,
             steward: settlement.steward,
             credit: settlement.credit,
             views: self.my_views(),
-            appeal_rest: Appeal::ALL.map(|appeal| self.appeal_rest(appeal)),
+            appeal_rest: Appeal::ALL
+                .iter()
+                .map(|appeal| self.appeal_rest(*appeal))
+                .collect(),
         })
     }
 

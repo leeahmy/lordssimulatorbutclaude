@@ -355,6 +355,11 @@ impl Body {
 
     /// Makes the body sick until `until`, or until its present sickness ends if that is
     /// later.
+    /// Ends a sickness there and then.
+    pub(crate) fn cure(&mut self) {
+        self.sick_until = None;
+    }
+
     pub(crate) fn sicken(&mut self, until: Timestamp) {
         self.sick_until = self.sick_until.max(Some(until));
     }

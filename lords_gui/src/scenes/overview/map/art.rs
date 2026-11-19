@@ -84,6 +84,26 @@ const BARE_BIRCH: &[&str] = &[
     ".....kk.....",
 ];
 
+const CHANTERELLE: &[&str] = &[
+    "..........",
+    "..yy...y..",
+    ".yYYy.yYy.",
+    "..ty...t..",
+    "....yy....",
+    ".y.yYYy.y.",
+    ".t..tt..t.",
+];
+
+const NETTLE: &[&str] = &[
+    "..l..l..l.",
+    ".lGl.G.lG.",
+    "..G.lGl.G.",
+    ".lGl.G.lGl",
+    "..G.lGl.G.",
+    ".lG..G..Gl",
+    "..g..g..g.",
+];
+
 const BILBERRY: &[&str] = &[
     "..kkkkkk..",
     ".kgGGmGgk.",
@@ -282,6 +302,354 @@ const DOCK: &[&str] = &[
     ".uu..uu..uu.",
 ];
 
+const PASTURE: &[&str] = &[
+    "k..k..k..k..k..k",
+    "kttkttkttkttkttk",
+    "k..............k",
+    "k..ww....BB....k",
+    "k.wwwk...BBBk..k",
+    "k..k.k...k.k...k",
+    "k..............k",
+    "kttkttkttkttkttk",
+    "k..k..k..k..k..k",
+];
+
+const COTTAGE: &[&str] = &[
+    ".....kkkk.....",
+    "...kkttttkk...",
+    "..kttttttttk..",
+    ".kttttttttttk.",
+    "kttttttttttttk",
+    "kkkkkkkkkkkkkk",
+    ".kBBBBBBBBBBk.",
+    ".kBaaBkkBaaBk.",
+    ".kBaaBkdBaaBk.",
+    ".kBBBBkdBBBBk.",
+    ".kBBBBkdBBBBk.",
+    ".kkkkkkkkkkkk.",
+];
+
+const TOWNHOUSE: &[&str] = &[
+    "....kkkk....",
+    "...kTTTTk...",
+    "..kTTTTTTk..",
+    ".kTTTTTTTTk.",
+    "kTTTTTTTTTTk",
+    "kkkkkkkkkkkk",
+    "kRRRRRRRRRRk",
+    "kRaaRRRRaaRk",
+    "kRaaRRRRaaRk",
+    "kRRRRRRRRRRk",
+    "kDDDDDDDDDDk",
+    "kRaaRkkRaaRk",
+    "kRaaRkdRaaRk",
+    "kRRRRkdRRRRk",
+    "kRRRRkdRRRRk",
+    "kkkkkkkkkkkk",
+];
+
+const TENEMENT: &[&str] = &[
+    "kkkkkkkkkkkkkkkk",
+    "kDDDDDDDDDDDDDDk",
+    "kRaaRaaRRaaRaaRk",
+    "kRaaRaaRRaaRaaRk",
+    "kRRRRRRRRRRRRRRk",
+    "kRaaRaaRRaaRaaRk",
+    "kRaaRaaRRaaRaaRk",
+    "kRRRRRRRRRRRRRRk",
+    "kRaaRaaRRaaRaaRk",
+    "kRaaRaaRRaaRaaRk",
+    "kRRRRRRRRRRRRRRk",
+    "kRaaRaaRRaaRaaRk",
+    "kRaaRaaRRaaRaaRk",
+    "kRRRRRRRRRRRRRRk",
+    "kRaaRaaRRaaRaaRk",
+    "kRaaRaaRRaaRaaRk",
+    "kRRRRRRRRRRRRRRk",
+    "kRaaRRRkkRRRaaRk",
+    "kRRRRRRkdRRRRRRk",
+    "kkkkkkkkkkkkkkkk",
+];
+
+const APARTMENT: &[&str] = &[
+    "kkkkkkkkkkkkkkkk",
+    "kQQQQQQQQQQQQQQk",
+    "kqaaqaaqqaaqaaqk",
+    "kqaaqaaqqaaqaaqk",
+    "kqqqqqqqqqqqqqqk",
+    "kqaaqaaqqaaqaaqk",
+    "kqaaqaaqqaaqaaqk",
+    "kqqqqqqqqqqqqqqk",
+    "kqaaqaaqqaaqaaqk",
+    "kqaaqaaqqaaqaaqk",
+    "kqqqqqqqqqqqqqqk",
+    "kqaaqaaqqaaqaaqk",
+    "kqaaqaaqqaaqaaqk",
+    "kqqqqqqqqqqqqqqk",
+    "kqaaqaaqqaaqaaqk",
+    "kqaaqaaqqaaqaaqk",
+    "kqqqqqqqqqqqqqqk",
+    "kqaaqaaqqaaqaaqk",
+    "kqaaqaaqqaaqaaqk",
+    "kqqqqqqqqqqqqqqk",
+    "kqaaqaaqqaaqaaqk",
+    "kqaaqaaqqaaqaaqk",
+    "kqqqqqqqqqqqqqqk",
+    "kqaaqqqkkqqqaaqk",
+    "kqqqqqqkaqqqqqqk",
+    "kkkkkkkkkkkkkkkk",
+];
+
+const MILL: &[&str] = &[
+    "....kkkkkk......",
+    "..kkttttttkk....",
+    ".kttttttttttk...",
+    "kkkkkkkkkkkkkk..",
+    ".kSsSsSsSsSsk...",
+    ".kssaasssssskkk.",
+    ".kSsaasSsSskBBBk",
+    ".kssssssssskBkBk",
+    ".kSsSkksSsskBBBk",
+    ".kssskdssssskBk.",
+    ".kSsSkdSsSsSkkk.",
+    ".kkkkkkkkkkkk...",
+    "uuuuuuuuuuuuuuuu",
+    ".uu..uuu...uu..u",
+];
+
+const MINE: &[&str] = &[
+    "......SS......",
+    "....SSssSS....",
+    "..SSssssssSS..",
+    ".SssskkkkkssS.",
+    "SssskBBBBBkssS",
+    "SssskBdddBkssS",
+    "SssskBdddBkssS",
+    "SssskBdddBkssS",
+    "kkkkkkkkkkkkkk",
+];
+
+const QUARRY: &[&str] = &[
+    "..kkkkkkkkkkkk..",
+    ".kSSSSSSSSSSSSk.",
+    "kSsssssssssssSSk",
+    "kSsSSSSSSSSssSSk",
+    "kSsSddddddSssSSk",
+    "kSsSSSSSSSSssSSk",
+    ".kSSSSSSSSSSSSk.",
+    "..kkkkkkkkkkkk..",
+];
+
+const MARKET: &[&str] = &[
+    ".kkkkkk..kkkkkk.",
+    "krwrwrwkkuwuwuwk",
+    "kwrwrwrkkwuwuwuk",
+    "kkkkkkkkkkkkkkkk",
+    ".kb....bkb....bk",
+    ".kbyyoobkbGGrrbk",
+    ".kbBBBBbkbBBBBbk",
+    ".kb....bkb....bk",
+    ".kk....kkk....kk",
+];
+
+const CIVIC: &[&str] = &[
+    "........kk........",
+    "......kkwwkk......",
+    "....kkwwwwwwkk....",
+    "..kkwwwwwwwwwwkk..",
+    "kkwwwwwwwwwwwwwwkk",
+    "kkkkkkkkkkkkkkkkkk",
+    ".kwskwskwskwskwsk.",
+    ".kwskwskwskwskwsk.",
+    ".kwskwskwskwskwsk.",
+    ".kwskwskkkkwskwsk.",
+    ".kwskwskddkwskwsk.",
+    ".kwskwskddkwskwsk.",
+    "kkkkkkkkkkkkkkkkkk",
+    "kssssssssssssssssk",
+];
+
+const FACTORY: &[&str] = &[
+    "...............xx...",
+    "..............xx....",
+    "..............kkk...",
+    "..............kRk...",
+    "..k...k...k...kRk...",
+    ".kek.kek.kek..kRk...",
+    "keeekeeekeeek.kRk...",
+    "kkkkkkkkkkkkkkkRkkkk",
+    "kRRRRRRRRRRRRRRRRRRk",
+    "kRaaRaaRaaRaaRaaRRRk",
+    "kRaaRaaRaaRaaRaaRRRk",
+    "kRRRRRRRRRRkkRRRRRRk",
+    "kRRRRRRRRRRkdRRRRRRk",
+    "kkkkkkkkkkkkkkkkkkkk",
+];
+
+const POWER: &[&str] = &[
+    "...xx........xx.....",
+    "....xx........xx....",
+    "...kkk.......kkk....",
+    "...kqk.......kqk....",
+    "...kqk.......kqk....",
+    "...kqk.......kqk....",
+    "..kkqkk.....kkqkk...",
+    "..kqqqk.....kqqqk...",
+    "kkkqqqkkkkkkkqqqkkkk",
+    "kQQQQQQQQQQQQQQQQQQk",
+    "kQyQQyQQyQQyQQyQQyQk",
+    "kQQQQQQQQQQQQQQQQQQk",
+    "kQyQQyQQkkQQyQQyQQyk",
+    "kQQQQQQQkdQQQQQQQQQk",
+    "kkkkkkkkkkkkkkkkkkkk",
+];
+
+const STATION: &[&str] = &[
+    "....kkkkkkkkkkkkkk....",
+    "..kkeeeeeeeeeeeeeekk..",
+    ".keeeeeeeeeeeeeeeeeek.",
+    "kkkkkkkkkkkkkkkkkkkkkk",
+    ".kRRaaRRaaRkkRaaRRaaRk",
+    ".kRRaaRRaaRkdRaaRRaaRk",
+    ".kRRRRRRRRRkdRRRRRRRRk",
+    "kkkkkkkkkkkkkkkkkkkkkk",
+    "bibibibibibibibibibibi",
+    "kkkkkkkkkkkkkkkkkkkkkk",
+];
+
+const HARBOUR: &[&str] = &[
+    ".........k..........",
+    ".........kvv........",
+    ".........kvvvv......",
+    ".........kvvvvvv....",
+    ".........kvvvv......",
+    ".........k..........",
+    "...kkkkkkkkkkkkkk...",
+    "....kBBBBBBBBBBk....",
+    "uuuuukkkkkkkkkkuuuuu",
+    "kBtBtBtBtBtBtBtBtBtk",
+    "kkkkkkkkkkkkkkkkkkkk",
+    ".kb...kb....kb...kb.",
+];
+
+const AIRPORT: &[&str] = &[
+    "..kkk...................",
+    "..kak......kkkkkkkk.....",
+    "..kak....kkqqqqqqqqkk...",
+    "..kqk...kqqqqqqqqqqqqk..",
+    "..kqk...kqqkkkkkkkkqqk..",
+    "..kqk...kqqkddddddkqqk..",
+    "kkkkkkkkkkkkkkkkkkkkkkkk",
+    "dddddddddddddddddddddddd",
+    "dwwddwwddwwddwwddwwddwwd",
+    "dddddddddddddddddddddddd",
+];
+
+const MAST: &[&str] = &[
+    "....r.....",
+    "....k.....",
+    "...kkk....",
+    "....k.....",
+    "...kkk....",
+    "....k.....",
+    "..kkkkk...",
+    "....k.....",
+    ".kkkkkkk..",
+    "....k.....",
+    "kkkkkkkkkk",
+    "kqqqqqqqqk",
+    "kqaaqqaaqk",
+    "kqaaqqaaqk",
+    "kqqqqqqqqk",
+    "kqqqkkqqqk",
+    "kqqqkdqqqk",
+    "kkkkkkkkkk",
+];
+
+const OFFICE: &[&str] = &[
+    "kkkkkkkkkkkkkk",
+    "kQQQQQQQQQQQQk",
+    "kaaqaaqaaqaaqk",
+    "kaaqaaqaaqaaqk",
+    "kqqqqqqqqqqqqk",
+    "kaaqaaqaaqaaqk",
+    "kaaqaaqaaqaaqk",
+    "kqqqqqqqqqqqqk",
+    "kaaqaaqaaqaaqk",
+    "kaaqaaqaaqaaqk",
+    "kqqqqqqqqqqqqk",
+    "kqqqqkkkkqqqqk",
+    "kqqqqkaakqqqqk",
+    "kkkkkkkkkkkkkk",
+];
+
+const TANK: &[&str] = &[
+    "...kkkkkk...",
+    ".kksssssskk.",
+    "ksssssssSSSk",
+    "ksssssssSSSk",
+    "kssuuussSSSk",
+    "ksssssssSSSk",
+    "ksssssssSSSk",
+    ".kksssssskk.",
+    "..kkkkkkkk..",
+    "..k.k..k.k..",
+];
+
+const CHARCOAL_KILN: &[&str] = &[
+    "....xx....",
+    "...xx.....",
+    "...kkkk...",
+    "..kbbbbk..",
+    ".kbBbbBbk.",
+    ".kbbFFbbk.",
+    "kbbBFFBbbk",
+    "kkkkkkkkkk",
+];
+
+const PALISADE: &[&str] = &[
+    ".k..k..k..k..k..",
+    "kBkkBkkBkkBkkBk.",
+    "kBkkBkkBkkBkkBk.",
+    "kbkkbkkbkkbkkbk.",
+    "kBkkBkkBkkBkkBk.",
+    "kbkkbkkbkkbkkbk.",
+    "kkkkkkkkkkkkkkk.",
+];
+
+const WALL: &[&str] = &[
+    "kkk.kkk.kkk.kkk.",
+    "kSk.kSk.kSk.kSk.",
+    "kSkkkSkkkSkkkSkk",
+    "kSsSSsSSsSSsSSsk",
+    "ksSSsSSkkSsSSsSk",
+    "kSsSSsSkdkSSsSSk",
+    "ksSSsSSkdkSsSSsk",
+    "kkkkkkkkkkkkkkkk",
+];
+
+const SHRINE: &[&str] = &[
+    "....kk....",
+    "...kyyk...",
+    "..kkkkkk..",
+    "..ksSssk..",
+    "..kSkkSk..",
+    "..kskdsk..",
+    ".kkkkkkkk.",
+    ".kssssssk.",
+];
+
+const PARK: &[&str] = &[
+    ".GG....lll....GG",
+    "GlGG..lGGGl..GGl",
+    ".GG...lGGl....GG",
+    ".b.....bb.....b.",
+    "ttttttttttttttt.",
+    ".r.y...kBBk..y.r",
+    "ttttttttttttttt.",
+    ".GG....lll....GG",
+];
+
 const WELL: &[&str] = &[
     "..kkkkkk..",
     ".kBBBBBBk.",
@@ -476,6 +844,8 @@ fn thing(kind: Kind, dress: Dress) -> Vec<Vec<Color32>> {
         Kind::Plant(PlantSpecies::Birch) => BIRCH,
         Kind::Plant(PlantSpecies::Bilberry) => BILBERRY,
         Kind::Plant(PlantSpecies::Lingonberry) => LINGONBERRY,
+        Kind::Plant(PlantSpecies::Chanterelle) => CHANTERELLE,
+        Kind::Plant(PlantSpecies::Nettle) => NETTLE,
         Kind::Rock | Kind::Lake => BOULDER,
         Kind::Pile(Item::Log | Item::Stick) => LOGS,
         Kind::Pile(Item::Stone) => STONES,
@@ -502,6 +872,57 @@ fn thing(kind: Kind, dress: Dress) -> Vec<Vec<Color32>> {
             StructureKind::Kiln => SMOKEHOUSE,
             StructureKind::Smithy => WORKSHOP,
             StructureKind::Dock => DOCK,
+            StructureKind::Sauna => SMOKEHOUSE,
+            StructureKind::Shrine => SHRINE,
+            StructureKind::Temple | StructureKind::Theatre | StructureKind::Museum => CIVIC,
+            StructureKind::Park => PARK,
+            StructureKind::Cinema => OFFICE,
+            StructureKind::Stadium => QUARRY,
+            StructureKind::Palisade => PALISADE,
+            StructureKind::Wall => WALL,
+            StructureKind::Barracks => LONGHOUSE,
+            StructureKind::Pasture => PASTURE,
+            StructureKind::Brewery => COTTAGE,
+            StructureKind::Tavern => COTTAGE,
+            StructureKind::Quarry => QUARRY,
+            StructureKind::Mine => MINE,
+            StructureKind::CharcoalKiln => CHARCOAL_KILN,
+            StructureKind::Weavery => COTTAGE,
+            StructureKind::Bathhouse => COTTAGE,
+            StructureKind::Market => MARKET,
+            StructureKind::Courthouse => CIVIC,
+            StructureKind::Infirmary => COTTAGE,
+            StructureKind::Harbour => HARBOUR,
+            StructureKind::School => COTTAGE,
+            StructureKind::Mill => MILL,
+            StructureKind::Sawmill => MILL,
+            StructureKind::Cottage => COTTAGE,
+            StructureKind::Brickworks => FACTORY,
+            StructureKind::Glassworks => FACTORY,
+            StructureKind::Guildhall => CIVIC,
+            StructureKind::Library => CIVIC,
+            StructureKind::Townhouse => TOWNHOUSE,
+            StructureKind::TownHall => CIVIC,
+            StructureKind::Bank => CIVIC,
+            StructureKind::PrintingHouse => FACTORY,
+            StructureKind::University => CIVIC,
+            StructureKind::Waterworks => TANK,
+            StructureKind::Steelworks => FACTORY,
+            StructureKind::Factory => FACTORY,
+            StructureKind::TextileMill => FACTORY,
+            StructureKind::Tenement => TENEMENT,
+            StructureKind::RailwayStation => STATION,
+            StructureKind::Cannery => FACTORY,
+            StructureKind::PowerStation => POWER,
+            StructureKind::TelegraphOffice => MAST,
+            StructureKind::Hospital => OFFICE,
+            StructureKind::ColdStore => TANK,
+            StructureKind::MachineDepot => WORKSHOP,
+            StructureKind::BroadcastingHouse => MAST,
+            StructureKind::ApartmentBlock => APARTMENT,
+            StructureKind::Airport => AIRPORT,
+            StructureKind::Institute => OFFICE,
+            StructureKind::ComputingCentre => OFFICE,
         },
         Kind::Person(bond) => {
             return drawn(
@@ -518,6 +939,9 @@ fn thing(kind: Kind, dress: Dress) -> Vec<Vec<Color32>> {
     };
 
     let mut pixels = drawn(rows, None);
+    for (from, to) in repainted(kind) {
+        recolor(&mut pixels, color(*from), color(*to));
+    }
     match (kind, dress) {
         (Kind::Plant(PlantSpecies::Birch), Dress::Autumn) => {
             recolor(&mut pixels, color('l'), color('y'));
@@ -541,6 +965,44 @@ fn thing(kind: Kind, dress: Dress) -> Vec<Vec<Color32>> {
         _ => {}
     }
     pixels
+}
+
+/// Returns the colors that are painted over in the picture a building shares with
+/// others, so that each can be told apart: the color painted over, and the color it is
+/// painted with.
+fn repainted(kind: Kind) -> &'static [(char, char)] {
+    match kind {
+        Kind::Structure(StructureKind::Barracks) => &[('t', 'S'), ('B', 'd')],
+        Kind::Structure(StructureKind::Temple) => &[('w', 'Y')],
+        Kind::Structure(StructureKind::Theatre) => &[('w', 'r')],
+        Kind::Structure(StructureKind::Museum) => &[('s', 'u')],
+        Kind::Structure(StructureKind::Cinema) => &[('q', 'm')],
+        Kind::Structure(StructureKind::Stadium) => &[('S', 'q'), ('d', 'G'), ('s', 'l')],
+        Kind::Structure(StructureKind::Brewery) => &[('t', 'o')],
+        Kind::Structure(StructureKind::Tavern) => &[('t', 'r')],
+        Kind::Structure(StructureKind::Weavery) => &[('t', 'u')],
+        Kind::Structure(StructureKind::Bathhouse) => &[('B', 's'), ('t', 'S')],
+        Kind::Structure(StructureKind::Infirmary) => &[('B', 'w'), ('t', 'r')],
+        Kind::Structure(StructureKind::School) => &[('t', 'G')],
+        Kind::Structure(StructureKind::Sawmill) => &[('s', 'B'), ('S', 'b')],
+        Kind::Structure(StructureKind::Brickworks) => &[('e', 'T')],
+        Kind::Structure(StructureKind::Glassworks) => &[('R', 's'), ('e', 'u')],
+        Kind::Structure(StructureKind::Guildhall) => &[('w', 't'), ('s', 'B')],
+        Kind::Structure(StructureKind::Library) => &[('w', 't')],
+        Kind::Structure(StructureKind::TownHall) => &[('s', 'y')],
+        Kind::Structure(StructureKind::Bank) => &[('w', 's'), ('s', 'S')],
+        Kind::Structure(StructureKind::PrintingHouse) => &[('R', 't'), ('e', 'b')],
+        Kind::Structure(StructureKind::University) => &[('w', 'R'), ('s', 'D')],
+        Kind::Structure(StructureKind::Steelworks) => &[('R', 'S'), ('e', 'd')],
+        Kind::Structure(StructureKind::TextileMill) => &[('R', 'q'), ('e', 'u')],
+        Kind::Structure(StructureKind::Cannery) => &[('R', 'B'), ('e', 'S')],
+        Kind::Structure(StructureKind::TelegraphOffice) => &[('q', 'R')],
+        Kind::Structure(StructureKind::Hospital) => &[('q', 'w'), ('Q', 'r')],
+        Kind::Structure(StructureKind::ColdStore) => &[('s', 'w'), ('S', 'n')],
+        Kind::Structure(StructureKind::MachineDepot) => &[('B', 'S'), ('t', 's')],
+        Kind::Structure(StructureKind::ComputingCentre) => &[('q', 'S'), ('Q', 'd')],
+        _ => &[],
+    }
 }
 
 /// Returns the pixels of the picture written out in `rows`, the letter `C` standing for
@@ -619,6 +1081,16 @@ fn color(letter: char) -> Color32 {
         'H' => Color32::from_rgb(112, 76, 50),
         'f' => Color32::from_rgb(255, 222, 96),
         'F' => Color32::from_rgb(250, 140, 44),
+        'R' => Color32::from_rgb(170, 84, 68),
+        'D' => Color32::from_rgb(128, 60, 52),
+        'T' => Color32::from_rgb(196, 96, 60),
+        'q' => Color32::from_rgb(196, 196, 188),
+        'Q' => Color32::from_rgb(150, 150, 146),
+        'a' => Color32::from_rgb(150, 204, 226),
+        'e' => Color32::from_rgb(74, 80, 104),
+        'i' => Color32::from_rgb(132, 138, 150),
+        'v' => Color32::from_rgb(236, 228, 204),
+        'x' => Color32::from_rgb(214, 214, 214),
         _ => Color32::TRANSPARENT,
     }
 }
@@ -749,12 +1221,19 @@ mod tests {
             StructureKind::Dock,
             StructureKind::Smithy,
         ];
+        let buildings = lords_sim::settlement::BUILDINGS
+            .iter()
+            .map(|plan| plan.kind)
+            .filter(|kind| !structures.contains(kind));
+        let structures: Vec<StructureKind> = structures.into_iter().chain(buildings).collect();
         let plants = [
             PlantSpecies::Spruce,
             PlantSpecies::Pine,
             PlantSpecies::Birch,
             PlantSpecies::Bilberry,
             PlantSpecies::Lingonberry,
+            PlantSpecies::Chanterelle,
+            PlantSpecies::Nettle,
         ];
         let bonds = [
             Bond::Stranger,
@@ -766,7 +1245,7 @@ mod tests {
 
         let mut kinds = vec![Kind::Rock, Kind::Pile(Item::Log), Kind::Pile(Item::Stone)];
         kinds.push(Kind::Pile(Item::RyeBread));
-        kinds.extend(structures.map(Kind::Structure));
+        kinds.extend(structures.into_iter().map(Kind::Structure));
         kinds.extend(plants.map(Kind::Plant));
         kinds.extend(bonds.map(Kind::Person));
         kinds

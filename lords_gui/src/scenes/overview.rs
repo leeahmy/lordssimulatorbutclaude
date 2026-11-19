@@ -1,14 +1,18 @@
+mod abroad;
 mod activity;
 mod character;
+mod chronicle;
 mod crafting;
 mod inventory;
 mod journal;
+mod knowledge;
 mod map;
 mod politics;
 mod skills;
 mod society;
 mod surroundings;
 mod time_bar;
+mod town;
 
 use std::time::Instant;
 
@@ -47,18 +51,26 @@ enum Tab {
     Surroundings,
     Inventory,
     Crafting,
+    Town,
+    Knowledge,
     People,
     Politics,
+    World,
+    Chronicle,
     Skills,
 }
 
 impl Tab {
-    const ALL: [Self; 6] = [
+    const ALL: [Self; 10] = [
         Self::Surroundings,
         Self::Inventory,
         Self::Crafting,
+        Self::Town,
+        Self::Knowledge,
         Self::People,
         Self::Politics,
+        Self::World,
+        Self::Chronicle,
         Self::Skills,
     ];
 
@@ -67,8 +79,12 @@ impl Tab {
             Self::Surroundings => "Surroundings",
             Self::Inventory => "Inventory",
             Self::Crafting => "Crafting",
+            Self::Town => "Town",
+            Self::Knowledge => "Knowledge",
             Self::People => "People",
             Self::Politics => "Politics",
+            Self::World => "World",
+            Self::Chronicle => "Chronicle",
             Self::Skills => "Skills",
         }
     }
@@ -232,7 +248,7 @@ fn central(ui: &mut egui::Ui, view: &View, tab: &mut Tab, hovered: Option<Subjec
     egui::CentralPanel::default().show(ui, |ui| {
         let asked = activity::show(ui, view);
 
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             for choice in Tab::ALL {
                 ui.selectable_value(tab, choice, choice.title());
             }
@@ -245,8 +261,12 @@ fn central(ui: &mut egui::Ui, view: &View, tab: &mut Tab, hovered: Option<Subjec
                 Tab::Surroundings => pointed = surroundings::show(ui, view, hovered),
                 Tab::Inventory => pointed.command = inventory::show(ui, view),
                 Tab::Crafting => pointed.command = crafting::show(ui, view),
+                Tab::Town => pointed.command = town::show(ui, view),
+                Tab::Knowledge => pointed.command = knowledge::show(ui, view),
                 Tab::People => pointed.command = society::show(ui, view),
                 Tab::Politics => pointed.command = politics::show(ui, view),
+                Tab::World => pointed.command = abroad::show(ui, view),
+                Tab::Chronicle => chronicle::show(ui, view),
                 Tab::Skills => skills::show(ui, view),
             });
         pointed.command = asked.or(pointed.command.take());
@@ -324,14 +344,29 @@ fn epitaph(view: &View, death: Death, format: &DateTimeFormat) -> String {
     let days = death.time.seconds_since(view.started) / SECONDS_PER_DAY;
     let walked = view.walked.as_millimeters() / 1_000_000;
 
-    format!(
+    let mut words = format!(
         "{} died of {} on {}, at the age of {age}, after {} in the forest and {} on foot.",
         player.name(),
         death.cause.name(),
         format.date(death.time),
         count(days, "day"),
         count(walked as u64, "kilometer"),
-    )
+    );
+    // Who is left of their own to remember them.
+    let living = |relation: &str| {
+        let kin = view.kin.iter();
+        kin.filter(|kin| kin.alive && kin.relation == relation)
+            .count() as u64
+    };
+    let (children, grandchildren) = (living("Child"), living("Grandchild"));
+    if children + grandchildren > 0 {
+        words.push_str(&format!(
+            " They leave {} and {}.",
+            count(children, "child").replace("childs", "children"),
+            count(grandchildren, "grandchild").replace("grandchilds", "grandchildren")
+        ));
+    }
+    words
 }
 
 fn stopped_banner(ui: &mut egui::Ui) -> bool {

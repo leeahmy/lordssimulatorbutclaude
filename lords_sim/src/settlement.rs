@@ -3,14 +3,21 @@
 
 use serde::{Deserialize, Serialize};
 
+pub use crate::advance::{Advance, Age};
+pub use crate::building::{BUILDINGS, Building, FARMERS_PER_FIELD, building, houses, places};
 use crate::item::Item;
 use crate::people::PersonId;
-use crate::politics::Law;
+use crate::politics::{Law, Office};
 use crate::time::Timestamp;
-use crate::world::{StructureKind, ThingId};
+use crate::world::ThingId;
 
 /// How many hours of work one builder puts in in a day.
 pub const WORKDAY: u32 = 8;
+
+/// The share of what people earn that is raised in taxes unless something else is set,
+/// and the most that can be, in hundredths.
+pub const USUAL_TAX: u8 = 10;
+pub const HIGHEST_TAX: u8 = 50;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Settlement {
@@ -24,7 +31,7 @@ pub struct Settlement {
     /// What is being worked towards.
     #[serde(default)]
     pub pursuit: Option<Advance>,
-    /// How far the pursuit has got, in days of one thinker's work.
+    /// How far the pursuit has got, in tenths of a day of one thinker's work.
     #[serde(default)]
     pub insight: u32,
     /// The grain growing in the fields, to be had at harvest.
@@ -43,9 +50,9 @@ pub struct Settlement {
     #[serde(default)]
     pub moot_year: u64,
     /// The days, counted from the epoch, on which the player character last made each
-    /// appeal, in the order of [`Appeal::ALL`].
+    /// appeal, in the order of [`Appeal::ALL`](crate::politics::Appeal::ALL).
     #[serde(default)]
-    pub appealed_on: [Option<u64>; 3],
+    pub appealed_on: Vec<Option<u64>>,
     /// What the player character has brought to the common store over what they have
     /// taken out of it, in kilocalories and their worth.
     #[serde(default)]
@@ -53,6 +60,123 @@ pub struct Settlement {
     /// How much of `credit` people have taken note of already.
     #[serde(default)]
     pub noted_credit: i64,
+    /// The coins in the treasury, once there is coin.
+    #[serde(default)]
+    pub treasury: i64,
+    /// The share of what people earn that is raised in taxes, in hundredths.
+    #[serde(default = "usual_tax")]
+    pub tax: u8,
+    /// What came into the treasury and went out of it the day before.
+    #[serde(default)]
+    pub ledger: Ledger,
+    /// What whoever leads has asked the merchants to buy from outside.
+    #[serde(default)]
+    pub orders: Vec<(Item, u32)>,
+    /// How many in a hundred of the grown-ups can read.
+    #[serde(default)]
+    pub literacy: u8,
+    /// How content people are with their lot, out of a hundred.
+    #[serde(default = "middling")]
+    pub contentment: u8,
+    /// How much use the tools in the store have seen since one last wore out.
+    #[serde(default)]
+    pub wear: u32,
+    /// How many came to settle, were born, and died since the last time it was told.
+    #[serde(default)]
+    pub tally: [u32; 3],
+    /// Who holds which office.
+    #[serde(default)]
+    pub offices: Vec<(Office, PersonId)>,
+    /// How much thieving and brawling there is, out of a hundred.
+    #[serde(default)]
+    pub crime: u8,
+    /// The day, counted from the epoch, until which a hard winter lasts.
+    #[serde(default)]
+    pub hard_winter_until: u64,
+    /// What has happened that is worth remembering, oldest first.
+    #[serde(default)]
+    pub chronicle: Vec<Chronicled>,
+    /// The era the settlement had reached when that was last looked at, counted from a
+    /// band.
+    #[serde(default)]
+    pub era_reached: u8,
+    /// What part of the work that takes it was done with power, with tools, and with
+    /// tractors the day before, which the next day's work goes by.
+    #[serde(default)]
+    pub running: Running,
+}
+
+const fn usual_tax() -> u8 {
+    USUAL_TAX
+}
+
+const fn middling() -> u8 {
+    50
+}
+
+/// Something that happened to a settlement, and when.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Chronicled {
+    pub time: Timestamp,
+    pub text: String,
+}
+
+/// What came into a treasury and went out of it in a day, in coins.
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Ledger {
+    /// What was raised in taxes, on what people earned and on what they sold outside.
+    pub taxes: i64,
+    /// What was sold outside, which is the gain of those who made it and not of the
+    /// treasury.
+    pub sales: i64,
+    pub interest: i64,
+    pub wages: i64,
+    /// What keeping up what stands built cost.
+    #[serde(default)]
+    pub upkeep: i64,
+    pub purchases: i64,
+    /// Whether there was not enough to pay everyone who is paid out of the treasury.
+    pub unpaid: bool,
+}
+
+impl Ledger {
+    pub const fn balance(&self) -> i64 {
+        self.taxes + self.interest - self.wages - self.upkeep - self.purchases
+    }
+}
+
+/// What a settlement had going for it when it last did a day's work.
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Running {
+    /// Whether a power station was manned and fuelled.
+    pub power: bool,
+    /// Whether tractors were kept running.
+    pub tractors: bool,
+    /// Whether ale was poured at a tavern.
+    pub tavern: bool,
+    /// How many healers, teachers, clerks, and millers were at work.
+    pub healers: u32,
+    pub teachers: u32,
+    pub clerks: u32,
+    pub millers: u32,
+    /// How many coins' worth the merchants, sailors, and transport workers can trade in
+    /// a day.
+    pub trade: u32,
+    /// Whether there was nothing to heat the houses with when it last froze.
+    #[serde(default)]
+    pub unheated: bool,
+    /// How many guards were on watch.
+    #[serde(default)]
+    pub guards: u32,
+    /// How foul the air and the water are with what is burned and made, out of a
+    /// hundred.
+    #[serde(default)]
+    pub pollution: u32,
+    /// How many priests kept the rites, and how many performers performed.
+    #[serde(default)]
+    pub priests: u32,
+    #[serde(default)]
+    pub performers: u32,
 }
 
 impl Settlement {
@@ -69,9 +193,23 @@ impl Settlement {
             laws: Vec::new(),
             steward: false,
             moot_year: 0,
-            appealed_on: [None; 3],
+            appealed_on: Vec::new(),
             credit: 0,
             noted_credit: 0,
+            treasury: 0,
+            tax: USUAL_TAX,
+            ledger: Ledger::default(),
+            orders: Vec::new(),
+            literacy: 0,
+            contentment: 50,
+            wear: 0,
+            tally: [0; 3],
+            offices: Vec::new(),
+            crime: 0,
+            hard_winter_until: 0,
+            chronicle: Vec::new(),
+            era_reached: 0,
+            running: Running::default(),
         }
     }
 
@@ -83,228 +221,35 @@ impl Settlement {
         self.advances.contains(&advance)
     }
 
+    /// Returns the age the settlement has reached.
+    pub fn age(&self) -> Age {
+        Age::of(&self.advances)
+    }
+
     /// Returns whether `advance` is neither known nor out of reach for want of another.
     pub fn can_pursue(&self, advance: Advance) -> bool {
-        !self.knows(advance) && advance.requires().is_none_or(|needed| self.knows(needed))
-    }
-}
-
-/// A better way of doing things that a settlement can work out.
-#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-pub enum Advance {
-    Smoking,
-    Pottery,
-    Boats,
-    Herbalism,
-    Weaving,
-    Farming,
-    Masonry,
-    Ironworking,
-    Writing,
-}
-
-impl Advance {
-    pub const ALL: [Self; 9] = [
-        Self::Smoking,
-        Self::Pottery,
-        Self::Boats,
-        Self::Herbalism,
-        Self::Weaving,
-        Self::Farming,
-        Self::Masonry,
-        Self::Ironworking,
-        Self::Writing,
-    ];
-
-    pub fn name(self) -> &'static str {
-        match self {
-            Self::Smoking => "Smoking",
-            Self::Pottery => "Pottery",
-            Self::Boats => "Boats",
-            Self::Herbalism => "Herbalism",
-            Self::Weaving => "Weaving",
-            Self::Farming => "Farming",
-            Self::Masonry => "Masonry",
-            Self::Ironworking => "Ironworking",
-            Self::Writing => "Writing",
-        }
+        !self.knows(advance) && advance.requires().iter().all(|needed| self.knows(*needed))
     }
 
-    /// Returns what the advance is good for.
-    pub fn use_of(self) -> &'static str {
-        match self {
-            Self::Smoking => "Smokehouses can be built, with which catches are kept for good",
-            Self::Pottery => {
-                "Clay can be fired in a kiln into pots, and food in the store keeps twice \
-                 as long in jars"
-            }
-            Self::Boats => "Docks can be built, from which fishers go out and catch twice as much",
-            Self::Herbalism => "Far fewer die of sickness",
-            Self::Weaving => "Everyone is clothed for the winter, pelts or no pelts",
-            Self::Farming => "Fields can be cleared, on which farmers grow rye",
-            Self::Masonry => "Wells can be dug, for clean water at home",
-            Self::Ironworking => {
-                "Bog ore can be raked from the lake and smithies built to forge it in, and \
-                 iron tools make all work yield a quarter more"
-            }
-            Self::Writing => "Thinkers build on what was written down, and get half again as far",
-        }
-    }
-
-    /// Returns how many days of one thinker's work the advance takes.
-    pub const fn cost(self) -> u32 {
-        match self {
-            Self::Smoking => 15,
-            Self::Pottery => 25,
-            Self::Boats | Self::Herbalism => 30,
-            Self::Weaving => 35,
-            Self::Farming => 40,
-            Self::Masonry => 50,
-            Self::Ironworking => 80,
-            Self::Writing => 100,
-        }
-    }
-
-    /// Returns the advance that has to be known first, if any has to.
-    pub const fn requires(self) -> Option<Self> {
-        match self {
-            Self::Masonry | Self::Writing => Some(Self::Pottery),
-            Self::Ironworking => Some(Self::Masonry),
-            _ => None,
+    /// Returns how many hundredths of what it does without, work yields with the tools
+    /// the settlement knows how to make.
+    pub fn tool_percent(&self) -> u32 {
+        if self.knows(Advance::Steel) {
+            140
+        } else if self.knows(Advance::Ironworking) {
+            125
+        } else if self.knows(Advance::Bronze) {
+            115
+        } else {
+            100
         }
     }
 }
-
-/// What it takes to put up a building of a settlement.
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub struct Building {
-    pub kind: StructureKind,
-    pub materials: &'static [(Item, u32)],
-    /// How many hours of work it takes.
-    pub hours: u32,
-    pub needs: Option<Advance>,
-    /// How many people it houses.
-    pub houses: u32,
-    pub use_of: &'static str,
-}
-
-/// The buildings that can be planned.
-pub const BUILDINGS: [Building; 11] = [
-    Building {
-        kind: StructureKind::Hut,
-        materials: &[(Item::Log, 12), (Item::SpruceBough, 20)],
-        hours: 48,
-        needs: None,
-        houses: 4,
-        use_of: "Houses four",
-    },
-    Building {
-        kind: StructureKind::Longhouse,
-        materials: &[
-            (Item::Log, 40),
-            (Item::SpruceBough, 40),
-            (Item::BirchBark, 20),
-        ],
-        hours: 160,
-        needs: None,
-        houses: 12,
-        use_of: "Houses twelve",
-    },
-    Building {
-        kind: StructureKind::Storehouse,
-        materials: &[(Item::Log, 16), (Item::BirchBark, 10)],
-        hours: 64,
-        needs: None,
-        houses: 0,
-        use_of: "Food in the store keeps twice as long",
-    },
-    Building {
-        kind: StructureKind::Workshop,
-        materials: &[(Item::Log, 16), (Item::Stone, 6)],
-        hours: 64,
-        needs: None,
-        houses: 0,
-        use_of: "Crafters make twice as much, and thinkers get half again as far",
-    },
-    Building {
-        kind: StructureKind::Smokehouse,
-        materials: &[(Item::Log, 8), (Item::Stone, 10)],
-        hours: 40,
-        needs: Some(Advance::Smoking),
-        houses: 0,
-        use_of: "Fish and meat brought in are smoked, and keep for good",
-    },
-    Building {
-        kind: StructureKind::Field,
-        materials: &[(Item::Stick, 20)],
-        hours: 80,
-        needs: Some(Advance::Farming),
-        houses: 0,
-        use_of: "Three farmers can work it",
-    },
-    Building {
-        kind: StructureKind::Hall,
-        materials: &[(Item::Log, 30), (Item::SpruceBough, 30), (Item::Stone, 10)],
-        hours: 120,
-        needs: None,
-        houses: 0,
-        use_of: "A place to meet and to be heard. A town cannot be without one",
-    },
-    Building {
-        kind: StructureKind::Kiln,
-        materials: &[(Item::Stone, 20), (Item::Clay, 10)],
-        hours: 40,
-        needs: Some(Advance::Pottery),
-        houses: 0,
-        use_of: "Clay pots can be fired by it",
-    },
-    Building {
-        kind: StructureKind::Dock,
-        materials: &[(Item::Log, 12), (Item::Cordage, 4)],
-        hours: 48,
-        needs: Some(Advance::Boats),
-        houses: 0,
-        use_of: "Fishers go out in boats, and catch twice as much",
-    },
-    Building {
-        kind: StructureKind::Smithy,
-        materials: &[(Item::Stone, 20), (Item::Log, 10)],
-        hours: 80,
-        needs: Some(Advance::Ironworking),
-        houses: 0,
-        use_of: "Iron tools can be forged in it",
-    },
-    Building {
-        kind: StructureKind::Well,
-        materials: &[(Item::Stone, 30), (Item::Log, 4)],
-        hours: 80,
-        needs: Some(Advance::Masonry),
-        houses: 0,
-        use_of: "Clean water that never freezes over",
-    },
-];
-
-/// Returns what it takes to put up a building of `kind`, if it is something that is planned
-/// and built by a settlement.
-pub fn building(kind: StructureKind) -> Option<&'static Building> {
-    BUILDINGS.iter().find(|building| building.kind == kind)
-}
-
-/// Returns how many people a structure of `kind` houses.
-pub fn houses(kind: StructureKind) -> u32 {
-    match kind {
-        StructureKind::Cabin => 4,
-        StructureKind::LeanTo => 2,
-        kind => building(kind).map_or(0, |building| building.houses),
-    }
-}
-
-/// How many farmers one field takes.
-pub const FARMERS_PER_FIELD: u32 = 3;
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::world::StructureKind;
 
     fn settlement() -> Settlement {
         let mut world = crate::World::default();
@@ -320,41 +265,59 @@ mod tests {
         let mut settlement = settlement();
         assert!(settlement.can_pursue(Advance::Pottery));
         assert!(!settlement.can_pursue(Advance::Masonry));
-        assert!(!settlement.can_pursue(Advance::Ironworking));
+        assert!(!settlement.can_pursue(Advance::Bronze));
 
         settlement.advances.push(Advance::Pottery);
         assert!(!settlement.can_pursue(Advance::Pottery));
         assert!(settlement.can_pursue(Advance::Masonry));
         assert!(settlement.can_pursue(Advance::Writing));
+        assert!(settlement.can_pursue(Advance::Charcoal));
+        assert!(!settlement.can_pursue(Advance::Bronze));
     }
 
     #[test]
-    fn every_advance_can_be_reached_and_says_what_it_is_good_for() {
+    fn better_metal_makes_for_better_tools() {
         let mut settlement = settlement();
+        assert_eq!(settlement.tool_percent(), 100);
+        assert_eq!(settlement.age(), Age::Stone);
 
-        while settlement.advances.len() < Advance::ALL.len() {
-            let next = Advance::ALL
-                .into_iter()
-                .find(|advance| settlement.can_pursue(*advance))
-                .expect("something can always be pursued until all is known");
-            settlement.advances.push(next);
-        }
+        settlement
+            .advances
+            .extend([Advance::Bronze, Advance::Mining]);
+        assert_eq!(settlement.tool_percent(), 115);
+        assert_eq!(settlement.age(), Age::Bronze);
 
-        for advance in Advance::ALL {
-            assert!(advance.cost() > 0);
-            assert!(!advance.name().is_empty() && !advance.use_of().is_empty());
-        }
+        settlement.advances.push(Advance::Ironworking);
+        assert_eq!(settlement.tool_percent(), 125);
+        settlement.advances.push(Advance::Steel);
+        assert_eq!(settlement.tool_percent(), 140);
     }
 
     #[test]
-    fn buildings_take_materials_and_work_and_some_house_people() {
-        for plan in &BUILDINGS {
-            assert!(!plan.materials.is_empty() && plan.hours > 0, "{plan:?}");
-            assert_eq!(building(plan.kind), Some(plan));
-            assert_eq!(houses(plan.kind), plan.houses);
-        }
-        assert_eq!(houses(StructureKind::Cabin), 4);
-        assert_eq!(houses(StructureKind::Campfire), 0);
-        assert_eq!(building(StructureKind::Cabin), None);
+    fn ledger_balances_what_came_in_against_what_went_out() {
+        let ledger = Ledger {
+            taxes: 40,
+            sales: 25,
+            interest: 5,
+            wages: 30,
+            upkeep: 0,
+            purchases: 50,
+            unpaid: false,
+        };
+
+        assert_eq!(ledger.balance(), -35);
+        assert_eq!(Ledger::default().balance(), 0);
+    }
+
+    #[test]
+    fn settlement_written_before_there_was_coin_still_reads() {
+        let old = "(name:\"Koivula\",cairn:3,founded:0,appealed_on:[Some(4),None,None])";
+
+        let read: Settlement = ron::from_str(old).expect("the old settlement decodes");
+
+        assert_eq!(read.appealed_on, [Some(4), None, None]);
+        assert_eq!(read.tax, USUAL_TAX);
+        assert_eq!(read.contentment, 50);
+        assert_eq!(read.treasury, 0);
     }
 }

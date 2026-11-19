@@ -11,7 +11,7 @@ pub use main_menu::MainMenu;
 pub use overview::Overview;
 
 use lords_save::LoadedSave;
-use lords_sim::{Name, Sex};
+use lords_sim::{Name, Sex, Start};
 
 use crate::options;
 use crate::saves::Saves;
@@ -38,7 +38,7 @@ pub struct Shared<'a> {
 pub enum SceneResponse {
     None,
     Transition(Box<dyn Scene>),
-    StartSim { name: Name, sex: Sex },
+    StartSim { name: Name, sex: Sex, start: Start },
     LoadSim(Box<LoadedSave>),
     App(AppAction),
 }

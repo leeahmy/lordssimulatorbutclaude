@@ -181,6 +181,8 @@ pub enum PlantSpecies {
     Birch,
     Bilberry,
     Lingonberry,
+    Chanterelle,
+    Nettle,
 }
 
 impl PlantSpecies {
@@ -193,6 +195,8 @@ impl PlantSpecies {
         match self {
             Self::Bilberry => Some(Item::Bilberries),
             Self::Lingonberry => Some(Item::Lingonberries),
+            Self::Chanterelle => Some(Item::Chanterelles),
+            Self::Nettle => Some(Item::Nettles),
             Self::Spruce | Self::Pine | Self::Birch => None,
         }
     }
@@ -205,6 +209,10 @@ impl PlantSpecies {
             Self::Bilberry => matches!(day, 196..=258),
             // From late August to the end of October.
             Self::Lingonberry => matches!(day, 232..=304),
+            // From August to the middle of October.
+            Self::Chanterelle => matches!(day, 213..=290),
+            // From the middle of May to the end of July, while they are young.
+            Self::Nettle => matches!(day, 135..=212),
             Self::Spruce | Self::Pine | Self::Birch => false,
         }
     }
@@ -318,6 +326,13 @@ impl Structure {
         }
     }
 
+    /// Pulls down what stands to build something of `plan` in its place.
+    pub(crate) fn rebuild(&mut self, plan: StructureKind) {
+        self.kind = StructureKind::Site;
+        self.plan = Some(plan);
+        self.work = 0;
+    }
+
     pub fn plan(&self) -> Option<StructureKind> {
         self.plan
     }
@@ -417,23 +432,124 @@ pub enum StructureKind {
     Kiln,
     Dock,
     Smithy,
+    Pasture,
+    Brewery,
+    Tavern,
+    Quarry,
+    Mine,
+    CharcoalKiln,
+    Weavery,
+    Bathhouse,
+    Market,
+    Courthouse,
+    Infirmary,
+    Harbour,
+    School,
+    Mill,
+    Sawmill,
+    Cottage,
+    Brickworks,
+    Glassworks,
+    Guildhall,
+    Library,
+    Townhouse,
+    TownHall,
+    Bank,
+    PrintingHouse,
+    University,
+    Waterworks,
+    Steelworks,
+    Factory,
+    TextileMill,
+    Tenement,
+    RailwayStation,
+    Cannery,
+    PowerStation,
+    TelegraphOffice,
+    Hospital,
+    ColdStore,
+    MachineDepot,
+    BroadcastingHouse,
+    ApartmentBlock,
+    Airport,
+    Institute,
+    ComputingCentre,
+    Palisade,
+    Barracks,
+    Wall,
+    Sauna,
+    Shrine,
+    Temple,
+    Theatre,
+    Park,
+    Museum,
+    Cinema,
+    Stadium,
 }
 
 impl StructureKind {
     const fn diameter(self) -> Length {
         Length::from_millimeters(match self {
-            Self::Campfire | Self::Fireplace | Self::FishTrap => 800,
-            Self::LeanTo => 2_500,
-            Self::Bed => 2_000,
-            Self::Cabin => 4_000,
             Self::Snare | Self::SprungSnare => 300,
-            Self::DryingRack | Self::Cairn | Self::Well | Self::Kiln => 1_500,
-            Self::Hall => 7_000,
-            Self::Dock | Self::Smithy => 4_000,
-            Self::Site | Self::Hut | Self::Storehouse | Self::Workshop => 4_000,
-            Self::Smokehouse => 2_500,
-            Self::Longhouse => 7_000,
-            Self::Field => 8_000,
+            Self::Campfire | Self::Fireplace | Self::FishTrap => 800,
+            Self::DryingRack | Self::Cairn | Self::Kiln | Self::Well => 1_500,
+            Self::Bed => 2_000,
+            Self::LeanTo | Self::Smokehouse | Self::CharcoalKiln => 2_500,
+            Self::Cabin
+            | Self::Site
+            | Self::Hut
+            | Self::Storehouse
+            | Self::Workshop
+            | Self::Dock
+            | Self::Smithy
+            | Self::Brewery
+            | Self::Tavern
+            | Self::Weavery
+            | Self::Bathhouse
+            | Self::Courthouse
+            | Self::Infirmary
+            | Self::School
+            | Self::Mill
+            | Self::Sawmill
+            | Self::Cottage
+            | Self::Brickworks
+            | Self::Glassworks
+            | Self::Library
+            | Self::Townhouse
+            | Self::Bank
+            | Self::PrintingHouse
+            | Self::TelegraphOffice => 4_000,
+            Self::Mine => 6_000,
+            Self::Longhouse
+            | Self::Hall
+            | Self::Market
+            | Self::Guildhall
+            | Self::TownHall
+            | Self::Waterworks
+            | Self::Steelworks
+            | Self::Tenement
+            | Self::Cannery
+            | Self::ColdStore
+            | Self::MachineDepot
+            | Self::BroadcastingHouse
+            | Self::ComputingCentre
+            | Self::Barracks => 7_000,
+            Self::Palisade | Self::Wall | Self::Park => 8_000,
+            Self::Sauna => 2_500,
+            Self::Shrine => 1_500,
+            Self::Temple => 9_000,
+            Self::Theatre | Self::Museum | Self::Cinema => 7_000,
+            Self::Stadium => 12_000,
+            Self::Field | Self::Pasture | Self::Quarry | Self::Harbour => 8_000,
+            Self::University
+            | Self::Factory
+            | Self::TextileMill
+            | Self::RailwayStation
+            | Self::PowerStation
+            | Self::Hospital
+            | Self::ApartmentBlock
+            | Self::Institute => 9_000,
+            Self::Airport => 12_000,
         })
     }
 
@@ -442,7 +558,14 @@ impl StructureKind {
     const fn height(self) -> Length {
         Length::from_millimeters(match self {
             Self::Campfire | Self::Fireplace | Self::Snare | Self::SprungSnare => 300,
-            Self::Bed | Self::Field | Self::Site | Self::Dock => 200,
+            Self::Bed
+            | Self::Field
+            | Self::Site
+            | Self::Dock
+            | Self::Pasture
+            | Self::Quarry
+            | Self::Harbour
+            | Self::Airport => 200,
             Self::FishTrap => 500,
             _ => 1_500,
         })
@@ -455,7 +578,16 @@ impl StructureKind {
 
     /// Returns whether the structure has walls and a roof to live under.
     pub const fn is_house(self) -> bool {
-        matches!(self, Self::Cabin | Self::Hut | Self::Longhouse)
+        matches!(
+            self,
+            Self::Cabin
+                | Self::Hut
+                | Self::Longhouse
+                | Self::Cottage
+                | Self::Townhouse
+                | Self::Tenement
+                | Self::ApartmentBlock
+        )
     }
 }
 

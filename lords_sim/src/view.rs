@@ -3,13 +3,15 @@ use std::sync::Arc;
 use crate::action::{AtHand, Job};
 use crate::climate::{Conditions, Temperature};
 use crate::item::Inventory;
+use crate::item::Item;
 use crate::journal::Entry;
 use crate::map::Map;
+use crate::neighbour::Neighbour;
 use crate::object::Sex;
-use crate::people::{Bond, PersonId, Role, WORKING_AGE};
+use crate::people::{Bond, PersonId, Role, Trait, WORKING_AGE};
 use crate::perception::Surroundings;
-use crate::politics::{Era, Law, Views};
-use crate::settlement::Advance;
+use crate::politics::{Era, Law, Office, Views};
+use crate::settlement::{Advance, Age, Chronicled, Ledger, Running};
 use crate::space::{Length, Location};
 use crate::state::Death;
 use crate::world::{Kind, StructureKind, Subject};
@@ -49,6 +51,29 @@ pub struct View {
     pub routine: bool,
     /// How many lives the player has lived before this one.
     pub past_lives: u32,
+    /// The coins the player character has, which are fewer than none when they owe.
+    pub purse: i64,
+    /// The other settlements of the wider world.
+    pub neighbours: Vec<Neighbour>,
+    /// The shares the player character holds in workplaces of each kind, and what they
+    /// paid the day before.
+    pub holdings: Vec<(StructureKind, u32)>,
+    pub income: i64,
+    /// The kin of the player character, dead or alive.
+    pub kin: Arc<[KinView]>,
+}
+
+/// What the player is shown of one of their kin.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KinView {
+    pub name: String,
+    /// What they are to the player character.
+    pub relation: &'static str,
+    /// How old they are, or were when they died.
+    pub age: u64,
+    pub alive: bool,
+    /// Whether they live in the settlement.
+    pub here: bool,
 }
 
 impl View {
@@ -94,6 +119,11 @@ pub struct PersonView {
     pub hired: bool,
     /// Whether they would have the player character lead, if a leader were chosen now.
     pub backs_you: bool,
+    pub traits: Vec<Trait>,
+    /// How good they are at their trade, out of a hundred.
+    pub skill: u8,
+    /// Whether they are a child learning the trade they are set to.
+    pub apprenticed: bool,
 }
 
 /// What the player is shown of their settlement.
@@ -118,6 +148,37 @@ pub struct SettlementView {
     pub buildings: Vec<(StructureKind, u32)>,
     pub sites: Vec<SiteView>,
     pub politics: PoliticsView,
+    /// The age the settlement has reached by what it knows.
+    pub age: Age,
+    /// Whether coin is known, and whether goods are bought and sold for it at a market.
+    pub coined: bool,
+    pub monetized: bool,
+    pub treasury: i64,
+    /// The share of what people earn that is raised in taxes, in hundredths.
+    pub tax: u8,
+    /// What came into the treasury and went out of it the day before.
+    pub ledger: Ledger,
+    /// What the merchants have been asked to buy from outside.
+    pub orders: Vec<(Item, u32)>,
+    /// How many in a hundred of the grown-ups can read.
+    pub literacy: u8,
+    /// How content people are with their lot, out of a hundred.
+    pub contentment: u8,
+    pub running: Running,
+    /// How many hundredths of what it yields without, work yields with the tools in the
+    /// store.
+    pub tools: u32,
+    /// How many work at each trade, and how many places there are to work at it for
+    /// trades that take a building.
+    pub jobs: Vec<(Role, u32, Option<u32>)>,
+    /// How many raiders the settlement can stand against.
+    pub defence: u32,
+    /// How much thieving and brawling there is, out of a hundred.
+    pub crime: u8,
+    /// How foul the air and the water are, out of a hundred.
+    pub pollution: u32,
+    /// What has happened that is worth remembering, oldest first.
+    pub chronicle: Vec<Chronicled>,
 }
 
 /// What the player is shown of how their settlement is led.
@@ -134,7 +195,20 @@ pub struct PoliticsView {
     pub voices: u32,
     pub laws: Vec<Law>,
     /// How many of the grown-ups are for each law, in the order of [`Law::ALL`].
-    pub ayes: [u32; 8],
+    pub ayes: Vec<u32>,
+    /// How many of them a law takes to be made.
+    pub needed: u32,
+    /// How many of the grown-ups lean to the one side of each issue, to neither, and to
+    /// the other, in the order of [`Issue::ALL`](crate::politics::Issue::ALL).
+    pub leanings: [[u32; 3]; 4],
+    /// Whether an election is a month or less away.
+    pub campaigning: bool,
+    /// Who holds each office, in the order of [`Office::ALL`], and whether they are of
+    /// the kind that holds it best.
+    pub offices: Vec<(Office, Option<(String, bool)>)>,
+    /// Those who could be given an office: the grown-ups held in the highest esteem,
+    /// with their traits in words.
+    pub trusted: Vec<(PersonId, String)>,
     /// How many grown-ups there are to have a law, the player character not counted.
     pub grown_ups: u32,
     /// Whether whoever leads makes the laws without asking.
@@ -151,7 +225,7 @@ pub struct PoliticsView {
     /// In how many days each appeal can be made again, in the order of [`Appeal::ALL`].
     ///
     /// [`Appeal::ALL`]: crate::politics::Appeal::ALL
-    pub appeal_rest: [u64; 3],
+    pub appeal_rest: Vec<u64>,
 }
 
 /// Someone who would be named at a moot.

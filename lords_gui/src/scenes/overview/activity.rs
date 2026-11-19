@@ -1,7 +1,7 @@
 use egui::RichText;
 use lords_sim::politics::Appeal;
 use lords_sim::view::{Walk, Work};
-use lords_sim::{Command, Job, View};
+use lords_sim::{Command, Item, Job, View};
 
 use super::surroundings::{distance, name};
 
@@ -95,14 +95,17 @@ fn doing(job: Job) -> String {
     match job {
         Job::Act { verb, .. } => verb.doing().to_owned(),
         Job::Craft(recipe) => format!("Working: {}", recipe.name().to_lowercase()),
+        Job::Consume(Item::Medicine) => "Taking medicine".to_owned(),
         Job::Consume(item) if item.is_drink() => {
             format!("Drinking {}", item.name().to_lowercase())
         }
         Job::Consume(item) => format!("Eating {}", item.name().to_lowercase()),
         Job::EatSnow => "Eating snow".to_owned(),
-        Job::Appeal(Appeal::Speech) => "Speaking to the village".to_owned(),
+        Job::Appeal(Appeal::Speech) => "Speaking to the people".to_owned(),
         Job::Appeal(Appeal::Feast) => "Holding a feast".to_owned(),
         Job::Appeal(Appeal::Notices) => "Putting up notices".to_owned(),
+        Job::Appeal(Appeal::Newspaper) => "Writing for the newspaper".to_owned(),
+        Job::Appeal(Appeal::Broadcast) => "Speaking over the air".to_owned(),
     }
 }
 

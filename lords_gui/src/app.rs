@@ -92,10 +92,10 @@ impl App {
         match self.scene.update(ui, &mut shared) {
             SceneResponse::None => {}
             SceneResponse::Transition(next) => self.enter(next),
-            SceneResponse::StartSim { name, sex } => {
+            SceneResponse::StartSim { name, sex, start } => {
                 let seed = RandomState::new().build_hasher().finish();
                 let overview = self.overview(
-                    Simulation::generate(name, sex, seed),
+                    Simulation::set_out(name, sex, seed, start),
                     Speed::BASE,
                     false,
                     SimulationId::generate(),

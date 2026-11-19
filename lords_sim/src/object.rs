@@ -199,14 +199,20 @@ impl Human {
 
     /// Returns how many tenths of a degree warmer the human is kept by what they wear.
     pub fn clothing_warmth(&self) -> i32 {
-        let furs: i32 = self
-            .carried
-            .stacks()
-            .iter()
-            .map(|stack| stack.item.warmth())
+        // The warmest thing carried for each part of the body is what is worn there.
+        let worn: i32 = crate::item::Garment::ALL
+            .into_iter()
+            .map(|garment| {
+                let stacks = self.carried.stacks().iter();
+                stacks
+                    .filter(|stack| stack.item.garment() == Some(garment))
+                    .map(|stack| stack.item.warmth())
+                    .max()
+                    .unwrap_or(0)
+            })
             .sum();
 
-        Self::PLAIN_CLOTHES + furs
+        Self::PLAIN_CLOTHES + worn
     }
 
     pub(crate) fn animal_mut(&mut self) -> &mut Animal {

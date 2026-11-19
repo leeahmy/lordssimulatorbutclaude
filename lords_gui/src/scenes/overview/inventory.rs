@@ -1,7 +1,7 @@
 use egui::RichText;
-use lords_sim::item::{CARRY_LIMIT, HEAVY_LOAD, Stack};
+use lords_sim::item::Stack;
 use lords_sim::time::gregorian::{SECONDS_PER_DAY, SECONDS_PER_HOUR};
-use lords_sim::{Command, View};
+use lords_sim::{Command, Item, View};
 
 use crate::scenes::count;
 
@@ -20,15 +20,25 @@ pub fn show(ui: &mut egui::Ui, view: &View) -> Option<Command> {
         let load = RichText::new(format!(
             "{} of {}",
             weight(carried.weight()),
-            weight(CARRY_LIMIT)
+            weight(carried.limit())
         ));
-        if carried.weight() > HEAVY_LOAD {
+        if carried.is_heavy() {
             ui.label(load.color(ui.visuals().warn_fg_color))
                 .on_hover_text("A load this heavy slows you down");
         } else {
             ui.label(load.weak());
         }
     });
+
+    if let Some(town) = view.settlement.as_ref().filter(|town| town.coined) {
+        ui.label(purse(view.purse))
+            .on_hover_text(if town.monetized {
+                "What is taken from the store is bought at the market for a fifth over what it \
+             is worth, and what is put in it is sold for a fifth under."
+            } else {
+                "There is coin, but no market yet to spend it at."
+            });
+    }
 
     if carried.is_empty() {
         ui.label(RichText::new("Nothing").weak());
@@ -95,6 +105,18 @@ pub fn show(ui: &mut egui::Ui, view: &View) -> Option<Command> {
     command
 }
 
+/// Returns the words for what is in the purse of the player character.
+fn purse(coins: i64) -> String {
+    match coins {
+        0 => "Your purse is empty.".to_owned(),
+        1.. => format!("You have {} in your purse.", count(coins as u64, "coin")),
+        _ => format!(
+            "You owe the market {}.",
+            count(coins.unsigned_abs(), "coin")
+        ),
+    }
+}
+
 fn stack_cells(ui: &mut egui::Ui, stack: &Stack) {
     let name = stack.item.name();
     let label = if stack.count > 1 {
@@ -112,6 +134,14 @@ fn stack_buttons(ui: &mut egui::Ui, stack: &Stack) -> Option<Command> {
     let item = stack.item;
     let mut command = None;
 
+    if item == Item::Medicine
+        && ui
+            .button("Take")
+            .on_hover_text("Ends a sickness there and then")
+            .clicked()
+    {
+        command = Some(Command::Consume(item));
+    }
     if item.food().is_some() {
         let verb = if item.is_drink() { "Drink" } else { "Eat" };
         if ui.button(verb).clicked() {
@@ -144,6 +174,12 @@ fn description(stack: &Stack) -> String {
             facts.push("may make you sick".to_owned());
         }
     }
+    if item.pack() > 0 {
+        facts.push(format!("worn, lets you carry {} more", weight(item.pack())));
+    }
+    if item == Item::Skis {
+        facts.push("carried, makes snow the fastest going there is".to_owned());
+    }
     if item.warmth() > 0 {
         facts.push(format!("worn, {} °C warmer", item.warmth() / 10));
     }
@@ -152,6 +188,7 @@ fn description(stack: &Stack) -> String {
         facts.push(format!("burns for {}", count(minutes, "minute")));
     }
     facts.push(format!("{} each", weight(item.weight())));
+    facts.push(format!("worth {}", count(u64::from(item.value()), "coin")));
 
     facts.join(", ")
 }
@@ -217,10 +254,16 @@ mod tests {
 
         assert_eq!(
             described(Item::RawMeat),
-            "450 kcal, 100 ml of water, may make you sick, 400 g each"
+            "450 kcal, 100 ml of water, may make you sick, 400 g each, worth 4 coins"
         );
-        assert_eq!(described(Item::FurCoat), "worn, 9 °C warmer, 2.0 kg each");
-        assert_eq!(described(Item::Stick), "burns for 15 minutes, 400 g each");
+        assert_eq!(
+            described(Item::FurCoat),
+            "worn, 9 °C warmer, 2.0 kg each, worth 60 coins"
+        );
+        assert_eq!(
+            described(Item::Stick),
+            "burns for 15 minutes, 400 g each, worth 1 coin"
+        );
     }
 
     #[test]
@@ -234,5 +277,12 @@ mod tests {
         let view = sim.view();
         assert!(!view.at_hand.loose.is_empty());
         harness.show(|ui| assert_eq!(show(ui, &view), None));
+    }
+
+    #[test]
+    fn purse_is_told_full_empty_and_owing() {
+        assert_eq!(purse(0), "Your purse is empty.");
+        assert_eq!(purse(1), "You have 1 coin in your purse.");
+        assert_eq!(purse(-40), "You owe the market 40 coins.");
     }
 }

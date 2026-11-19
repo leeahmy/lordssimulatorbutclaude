@@ -8,16 +8,14 @@ use crate::body::Ailment;
 use crate::item::{Inventory, Item, Stack};
 use crate::journal::Tone;
 use crate::object::{Human, Living, Name, Object, Sex};
-use crate::people::{ADULT_AGE, DEVOTED, FRIENDLY, Person, PersonId, Role, given_name};
+use crate::people::{ADULT_AGE, DEVOTED, FRIENDLY, Person, PersonId, Role, Trait, given_name};
 use crate::politics::{Law, inherited_views};
-use crate::settlement::{
-    Advance, BUILDINGS, FARMERS_PER_FIELD, Settlement, WORKDAY, building, houses,
-};
+use crate::settlement::{Advance, BUILDINGS, Settlement, building, houses, places};
 use crate::space::{Length, Location};
 use crate::time::Timestamp;
 use crate::time::gregorian::{Date, SECONDS_PER_DAY, TimeOfDay};
 use crate::view::{PersonView, SettlementView, SiteView};
-use crate::world::{PlantSpecies, Structure, StructureKind, Subject, Thing, ThingId};
+use crate::world::{Structure, StructureKind, Subject, Thing, ThingId};
 
 use super::Simulation;
 
@@ -51,6 +49,22 @@ const DAYS_TO_STARVE: u16 = 15;
 const MOST_WANDERERS: usize = 2;
 const WANDERER_CHANCE: u64 = 4;
 
+/// The size of a band at which half as many of those who pass through ask to stay as
+/// would with nobody there, and how many come to settle in a hundred thousand days for
+/// each one who lives in a settlement already: one or two in a hundred in a year.
+const SMALL_BAND: u64 = 12;
+
+/// The number of people beyond which no more come to settle for there being more.
+const LARGE_TOWN: usize = 1_500;
+const SETTLERS_PER_HEAD: u64 = 3;
+
+/// How many people a settlement has before what happens to those the player character
+/// is not close to is told by the month and not one by one.
+pub(super) const CROWD: usize = 40;
+
+/// The contentment below which people leave for somewhere better.
+const RESTLESS: u8 = 25;
+
 /// How far from home wanderers make camp, in millimeters, and for how many days.
 const CAMP_DISTANCE: (i64, i64) = (70_000, 160_000);
 const CAMP_DAYS: (i64, i64) = (8, 20);
@@ -60,16 +74,20 @@ const CAMP_DAYS: (i64, i64) = (8, 20);
 const DRAW_PEOPLE: usize = 3;
 const DRAW_FOOD_DAYS: u32 = 10;
 
-/// How far apart the buildings of a settlement stand, in millimeters.
+/// How far apart the buildings of a settlement stand, in millimeters, how many plots
+/// out from the cairn it reaches, and how many plots out its outskirts begin.
 const PLOT: i64 = 9_000;
+const REACH: i64 = 16;
+const OUTSKIRTS: i64 = 5;
 
-/// The days of the year between which rye grows, and the day it is harvested.
-const GROWING_SEASON: (u16, u16) = (121, 258);
-const HARVEST_DAY: u16 = 259;
-const GRAIN_PER_FARMER_DAY: u32 = 30;
+/// How many things stand built before new houses go up in the place of old ones.
+const BUILT_UP: usize = 100;
 
-/// How many pelts a set of winter clothes takes.
-const PELTS_PER_OUTFIT: u32 = 4;
+/// The chance in a hundred each month that a sickness sweeps through a settlement of
+/// [`CROWD`] people or more that knows nothing of vaccination, and the chance in a
+/// hundred that it takes each one it reaches.
+const EPIDEMIC_CHANCE: u64 = 2;
+const EPIDEMIC_TOLL: u64 = 6;
 
 /// The chance in a thousand that someone left out in the frost dies of it in a day.
 const EXPOSURE_RISK: u64 = 20;
@@ -77,20 +95,26 @@ const EXPOSURE_RISK: u64 = 20;
 /// The chance in ten thousand that someone dies of a sickness in a day.
 const SICKNESS_RISK: u64 = 2;
 
-/// What the player character does not put in the common store with the rest of their load.
-const KEPT_ON: [Item; 11] = [
-    Item::Knife,
-    Item::FireSteel,
-    Item::StoneAxe,
-    Item::BoneNeedle,
-    Item::FishingRod,
-    Item::BarkPot,
-    Item::FurHat,
-    Item::FurCoat,
-    Item::FurBoots,
-    Item::Water,
-    Item::BoiledWater,
-];
+/// Returns whether the player character keeps `item` on them when they put the rest of
+/// their load in the common store: tools, clothes, and water.
+fn kept_on(item: Item) -> bool {
+    item.garment().is_some()
+        || item.axe().is_some()
+        || matches!(
+            item,
+            Item::Knife
+                | Item::FireSteel
+                | Item::Pickaxe
+                | Item::Saw
+                | Item::BoneNeedle
+                | Item::FishingRod
+                | Item::BarkPot
+                | Item::ClayPot
+                | Item::Medicine
+                | Item::Water
+                | Item::BoiledWater
+        )
+}
 
 impl Simulation {
     /// Makes sure the player character is one of the people of the world, so that others
@@ -318,7 +342,7 @@ impl Simulation {
     }
 
     /// Returns the common store of the settlement.
-    fn store_mut(&mut self) -> Option<&mut Inventory> {
+    pub(super) fn store_mut(&mut self) -> Option<&mut Inventory> {
         let cairn = self.state.settlement.as_ref()?.cairn;
         self.state
             .world
@@ -332,7 +356,7 @@ impl Simulation {
     }
 
     /// Puts `count` of `item` in the common store.
-    fn stock(&mut self, item: Item, count: u32) {
+    pub(super) fn stock(&mut self, item: Item, count: u32) {
         if let Some(store) = self.store_mut() {
             store.add(item, count);
         }
@@ -373,6 +397,8 @@ impl Simulation {
         settlement.moot_year = Date::from_timestamp(self.state.time).year();
         self.state.settlement = Some(settlement);
         self.society_stale = true;
+        let founder = self.state.player.name().full();
+        self.chronicle(format!("{founder} raised a cairn and founded the place."));
     }
 
     pub(super) fn rename_settlement(&mut self, name: String) {
@@ -391,7 +417,7 @@ impl Simulation {
         let load: Vec<Stack> = carried
             .stacks()
             .iter()
-            .filter(|stack| !KEPT_ON.contains(&stack.item))
+            .filter(|stack| !kept_on(stack.item))
             .copied()
             .collect();
         for stack in &load {
@@ -406,18 +432,31 @@ impl Simulation {
         }
         self.stale = true;
         self.society_stale = true;
-        self.note(Tone::Plain, "You put your load in the common store.");
-        self.credit(load.iter().map(Self::worth).sum());
+        if !self.monetized() {
+            self.note(Tone::Plain, "You put your load in the common store.");
+            self.credit(load.iter().map(Self::worth).sum());
+            return true;
+        }
+
+        // Where there is coin, the store buys what it is brought, as far as the
+        // treasury goes. What it cannot pay for is remembered.
+        let asked: i64 = load.iter().map(Self::selling_price).sum();
+        let paid = self.pay(asked);
+        if paid < asked {
+            let unpaid: i64 = load.iter().map(Self::worth).sum();
+            self.credit(unpaid * (asked - paid) / asked.max(1));
+        }
+        self.note(
+            Tone::Plain,
+            format!("You sell your load to the store for {paid} coins."),
+        );
         true
     }
 
     /// Returns why the player has nothing to put in the store, if they have not.
     pub(super) fn check_deposit(&self) -> Result<(), String> {
         let carried = self.state.player.carried();
-        let any = carried
-            .stacks()
-            .iter()
-            .any(|stack| !KEPT_ON.contains(&stack.item));
+        let any = carried.stacks().iter().any(|stack| !kept_on(stack.item));
 
         if self.state.settlement.is_none() {
             Err("There is no settlement to keep a store for.".to_owned())
@@ -435,6 +474,20 @@ impl Simulation {
         let count = count.min(room).min(self.at_hand.loose.count(item));
         if count == 0 {
             self.note(Tone::Plain, "You cannot carry any more.");
+            return;
+        }
+        // What lies in piles is taken first, and is free. The rest is bought.
+        let stored = self.store().map_or(0, |store| store.count(item));
+        let piled = self.at_hand.loose.count(item).saturating_sub(stored);
+        let cost = Self::buying_price(item, count.saturating_sub(piled));
+        if self.monetized() && self.at_hand.store.is_some() && cost > self.state.purse.max(0) {
+            self.note(
+                Tone::Plain,
+                format!(
+                    "That costs {cost} coins at the market, and you have {}.",
+                    self.state.purse
+                ),
+            );
             return;
         }
 
@@ -461,15 +514,23 @@ impl Simulation {
         } else {
             self.note(Tone::Plain, "You work on the building.");
         }
-        self.credit_work();
+        // An hour's building is paid a coin where there is coin, and remembered where
+        // there is none.
+        if !self.monetized() || self.pay(1) == 0 {
+            self.credit_work();
+        }
         self.society_stale = true;
         true
     }
 
-    fn finished_building(&mut self, kind: StructureKind) {
+    pub(super) fn finished_building(&mut self, kind: StructureKind) {
         let name = crate::world::Kind::Structure(kind).name().to_lowercase();
         self.stale = true;
         self.note(Tone::Good, format!("The {name} is finished."));
+        // The first of anything is remembered.
+        if self.built().iter().filter(|built| **built == kind).count() == 1 {
+            self.chronicle(format!("The first {name} was built."));
+        }
     }
 
     /// Plans a building of `kind`, if the player has the say to.
@@ -512,17 +573,40 @@ impl Simulation {
                 lacking.join(", ")
             ));
         }
-        let Some(plot) = self.free_plot() else {
-            return Err("There is no room left to build on.".to_owned());
+        let coins = if settlement.knows(Advance::Coinage) && !settlement.lives_by(Law::PublicWorks)
+        {
+            i64::from(plan.coins)
+        } else {
+            0
         };
+        if coins > settlement.treasury {
+            return Err(format!(
+                "That costs {coins} coins, and the treasury holds {}.",
+                settlement.treasury.max(0)
+            ));
+        }
+        // Once a place is built up, a bigger house goes where the smallest stood.
+        let replaced = self.lesser_house(plan.houses);
+        let plot = self.free_plot(plan.outskirts);
+        if replaced.is_none() && plot.is_none() {
+            return Err("There is no room left to build on.".to_owned());
+        }
 
         if let Some(store) = self.store_mut() {
             for (item, count) in plan.materials {
                 store.take(*item, *count);
             }
         }
-        let site = Structure::site(Object::new(plot, self.state.time), kind);
-        self.add_thing(Thing::Structure(site));
+        if let Some(settlement) = &mut self.state.settlement {
+            settlement.treasury -= coins;
+        }
+        if let Some(old) = replaced.and_then(|id| self.state.world.structure_mut(id)) {
+            old.rebuild(kind);
+            self.stale = true;
+        } else if let Some(plot) = plot {
+            let site = Structure::site(Object::new(plot, self.state.time), kind);
+            self.add_thing(Thing::Structure(site));
+        }
         self.society_stale = true;
         let name = crate::world::Kind::Structure(kind).name().to_lowercase();
         self.note(
@@ -535,32 +619,55 @@ impl Simulation {
         Ok(())
     }
 
-    /// Returns the nearest plot to the cairn that is dry and has nothing built on it.
-    fn free_plot(&self) -> Option<Location> {
+    /// Returns the smallest house there is that holds no more than half as many as a
+    /// house for `people`, once so much stands that new houses are better put in the
+    /// place of old ones.
+    fn lesser_house(&self, people: u32) -> Option<ThingId> {
+        let structures = self.structures();
+        if people == 0 || structures.len() < BUILT_UP {
+            return None;
+        }
+
+        structures
+            .into_iter()
+            .filter(|(_, kind)| building(*kind).is_some())
+            .map(|(id, kind)| (houses(kind), id))
+            .filter(|(holds, _)| *holds > 0 && holds * 2 <= people)
+            .min()
+            .map(|(_, id)| id)
+    }
+
+    /// Returns the nearest plot to the cairn that is dry and has nothing built on it, of
+    /// those on the `outskirts` of the settlement if that is where it is to be.
+    fn free_plot(&self, outskirts: bool) -> Option<Location> {
         let world = &self.state.world;
         let cairn = self.state.settlement.as_ref()?.cairn;
         let center = world.structure(cairn)?.location();
-        let built: Vec<Location> = self
+        let taken: std::collections::HashSet<(i64, i64)> = self
             .structures()
             .iter()
             .filter_map(|(id, _)| Some(world.structure(*id)?.location()))
+            .map(|at| {
+                let east = (at.x() - center.x() + PLOT / 2).div_euclid(PLOT);
+                let north = (at.y() - center.y() + PLOT / 2).div_euclid(PLOT);
+                (east, north)
+            })
             .collect();
 
-        let mut plots: Vec<(i64, i64)> = (-6..=6)
-            .flat_map(|east| (-6..=6).map(move |north| (east, north)))
-            .filter(|plot| *plot != (0, 0))
+        let mut plots: Vec<(i64, i64)> = (-REACH..=REACH)
+            .flat_map(|east| (-REACH..=REACH).map(move |north| (east, north)))
+            .filter(|plot| *plot != (0, 0) && !taken.contains(plot))
             .collect();
-        plots.sort_by_key(|(east, north)| (east * east + north * north, *north, *east));
+        plots.sort_by_key(|(east, north)| {
+            let away = east * east + north * north;
+            let inside = away < OUTSKIRTS * OUTSKIRTS;
+            (outskirts && inside, away, *north, *east)
+        });
 
         plots
             .into_iter()
             .map(|(east, north)| Location::new(center.x() + east * PLOT, center.y() + north * PLOT))
-            .find(|plot| {
-                let free = built
-                    .iter()
-                    .all(|at| at.distance_to(*plot) > Length::from_millimeters(PLOT / 2));
-                free && !world.is_water(*plot)
-            })
+            .find(|plot| !world.is_water(*plot))
     }
 
     pub(super) fn pursue(&mut self, advance: Advance) {
@@ -604,9 +711,44 @@ impl Simulation {
             && person.member
             && person.role != role
         {
-            person.role = role;
+            person.take_up(role);
             self.society_stale = true;
         }
+    }
+
+    /// Apprentices a child of the player character to the trade of `role`, which they
+    /// learn until they are old enough to work at it.
+    pub(super) fn apprentice(&mut self, id: PersonId, role: Role) {
+        let now = self.state.time;
+        let me = self.state.world.protagonist();
+        let Some(child) = self.state.world.person_mut(id) else {
+            return;
+        };
+        let first = child.name.first().to_owned();
+        let refusal = if me.is_none() || !child.parents.contains(&me) {
+            Some("Only your own child is yours to apprentice.".to_owned())
+        } else if child.works(now) {
+            Some(format!("{first} is old enough to work already."))
+        } else if child.age(now) < crate::people::APPRENTICE_AGE {
+            Some(format!("{first} is too young to learn a trade yet."))
+        } else {
+            None
+        };
+        if let Some(refusal) = refusal {
+            self.note(Tone::Plain, refusal);
+            return;
+        }
+
+        child.take_up(role);
+        child.apprenticed = role != Role::Idle;
+        self.society_stale = true;
+        self.note(
+            Tone::Good,
+            format!(
+                "{first} is to learn the trade of a {} until old enough to work at it.",
+                role.name().to_lowercase()
+            ),
+        );
     }
 
     /// Writes the death of the player character into what is kept of them as one of the
@@ -619,12 +761,6 @@ impl Simulation {
         if let Some(me) = my_id.and_then(|id| self.state.world.person_mut(id)) {
             me.died = Some(now);
             me.location = at;
-            if let Some(settlement) = &mut self.state.settlement
-                && settlement.leader == my_id
-            {
-                // The next day's moot finds another.
-                settlement.leader = None;
-            }
             let partner = me.partner.take();
             if let Some(partner) = partner.and_then(|id| self.state.world.person_mut(id)) {
                 partner.partner = None;
@@ -665,13 +801,31 @@ impl Simulation {
             self.add_thing(Thing::Pile(pile));
         }
 
+        // What the dead had in their purse goes to their partner or their child, and to
+        // the treasury if it is someone else who lives on.
+        let dead = self.state.world.protagonist();
+        let kin = dead.is_some() && (heir.partner == dead || heir.parents.contains(&dead));
+        let purse = std::mem::take(&mut self.state.purse);
+        if kin {
+            self.state.purse = purse.max(0);
+        }
+        // A child has learned half of what their parent knew at their side.
+        if heir.parents.contains(&dead) && dead.is_some() {
+            for skill in crate::skill::Skill::ALL {
+                let taught = fallen.skills().experience(skill) / 2;
+                self.state.player.skills_mut().gain(skill, taught);
+            }
+        }
         self.state.world.set_protagonist(id);
         if let Some(settlement) = &mut self.state.settlement {
             // What the dead brought to the store and said by the cairn is theirs, not
             // their heir's.
             settlement.credit = 0;
             settlement.noted_credit = 0;
-            settlement.appealed_on = [None; 3];
+            settlement.appealed_on.clear();
+            if !kin {
+                settlement.treasury += purse.max(0);
+            }
         }
         self.state.death = None;
         self.state.started = now;
@@ -813,6 +967,15 @@ impl Simulation {
             shores.min_by_key(|shore| home.distance_to(*shore))
         });
 
+        // Where each trade that takes a workplace has its workplaces.
+        let mut workplaces: Vec<Vec<Location>> = vec![Vec::new(); Role::ALL.len()];
+        for (id, kind) in self.structures() {
+            let jobs = building(kind).and_then(|plan| plan.jobs);
+            if let (Some((role, _)), Some(structure)) = (jobs, world.structure(id)) {
+                workplaces[role as usize].push(structure.location());
+            }
+        }
+
         let moves: Vec<(PersonId, Location)> = world
             .people()
             .filter(|(_, person)| person.member)
@@ -830,6 +993,7 @@ impl Simulation {
 
                 let at_home = offset(home, 4_000.0 + f64::from(id.0 % 5) * 1_500.0);
                 let working = (8..18).contains(&hour) && person.works(now);
+                let places = &workplaces[person.role as usize];
                 let spot = match person.role {
                     _ if !working => at_home,
                     Role::Idle => at_home,
@@ -839,9 +1003,10 @@ impl Simulation {
                     Role::Forager | Role::Gatherer | Role::Trapper | Role::Woodcutter => {
                         offset(home, 35_000.0 + f64::from(id.0 % 7) * 5_000.0)
                     }
-                    Role::Farmer | Role::Builder | Role::Crafter | Role::Thinker => {
-                        offset(home, 12_000.0)
+                    _ if !places.is_empty() => {
+                        offset(places[id.0 as usize % places.len()], 2_500.0)
                     }
+                    _ => offset(home, 12_000.0),
                 };
                 let spot = if world.is_water(spot) { at_home } else { spot };
                 (id, spot)
@@ -865,32 +1030,151 @@ impl Simulation {
         self.wanderers();
 
         let members = self.members();
+        self.world_day(&members);
         if self.state.settlement.is_some() {
-            self.labor(&members);
+            self.practise(&members);
+            self.work_day(&members);
             self.feed(&members);
             self.winter(&members);
             self.pair_up(&members);
             self.politics_day();
+            self.unrest(&members);
+            self.tell_the_month(members.len());
         } else {
             self.feed_children(&members);
         }
         self.mortality(&members);
     }
 
+    /// Has everyone who works get a month better at their trade on the first of the
+    /// month.
+    pub(super) fn practise(&mut self, members: &[PersonId]) {
+        let now = self.state.time;
+        if Date::from_timestamp(now).day() != 1 {
+            return;
+        }
+        for id in members {
+            if let Some(person) = self.state.world.person_mut(*id)
+                && (person.works(now) || person.apprenticed)
+            {
+                person.practise();
+            }
+        }
+    }
+
+    /// Returns whether the person is close enough to the player character for what
+    /// happens to them to be told however many people there are.
+    fn is_close(&self, id: PersonId) -> bool {
+        let world = &self.state.world;
+        let me = world.protagonist();
+        let leader = self.state.settlement.as_ref().and_then(|s| s.leader);
+        world.person(id).is_some_and(|person| {
+            person.partner == me
+                || person.parents.contains(&me)
+                || person.regard >= DEVOTED
+                || Some(id) == leader
+                || me
+                    .and_then(|me| world.person(me))
+                    .is_some_and(|mine| mine.parents.contains(&Some(id)))
+        })
+    }
+
+    /// Returns whether there are so many people that what happens to those the player
+    /// character is not close to is told by the month.
+    fn crowded(&self) -> bool {
+        self.state.settlement.is_some() && self.members().len() >= CROWD
+    }
+
+    /// Counts one more who came to settle, was born, or died, in that order.
+    fn count_towards_the_month(&mut self, which: usize) {
+        if let Some(settlement) = &mut self.state.settlement {
+            settlement.tally[which] += 1;
+        }
+    }
+
     pub(super) fn person_dies(&mut self, id: PersonId, of: &str) {
         let now = self.state.time;
+        let told = !self.crowded() || self.is_close(id);
         let Some(person) = self.state.world.person_mut(id) else {
             return;
         };
         person.died = Some(now);
         let name = person.name.full();
+        let member = person.member;
         let partner = person.partner.take();
         if let Some(partner) = partner.and_then(|id| self.state.world.person_mut(id)) {
             partner.partner = None;
         }
 
         self.stale = true;
-        self.note(Tone::Bad, format!("{name} has died of {of}."));
+        if member {
+            self.count_towards_the_month(2);
+        }
+        if told {
+            self.note(Tone::Bad, format!("{name} has died of {of}."));
+        }
+    }
+
+    /// Tells on the first of the month how many came, were born, and died in the month
+    /// before, where there are too many people to tell of one by one.
+    fn tell_the_month(&mut self, members: usize) {
+        let date = Date::from_timestamp(self.state.time);
+        let Some(settlement) = &mut self.state.settlement else {
+            return;
+        };
+        if date.day() != 1 {
+            return;
+        }
+        let [came, born, died] = std::mem::take(&mut settlement.tally);
+        let place = settlement.name.clone();
+        if members >= CROWD && came + born + died > 0 {
+            self.note(
+                Tone::Plain,
+                format!(
+                    "In the past month {came} settled in {place}, {born} were born, and \
+                     {died} died. {} live there now.",
+                    members + 1
+                ),
+            );
+        }
+    }
+
+    /// Has someone leave for somewhere better when people are not content with their lot.
+    fn unrest(&mut self, members: &[PersonId]) {
+        let now = self.state.time;
+        let me = self.state.world.protagonist();
+        let restless = self
+            .state
+            .settlement
+            .as_ref()
+            .is_some_and(|settlement| settlement.contentment < RESTLESS);
+        if !restless || members.len() < 6 || !self.state.rng.chance(5) {
+            return;
+        }
+
+        let pick = self.state.rng.below(members.len() as u64) as usize;
+        let id = members[pick];
+        let told = !self.crowded() || self.is_close(id);
+        let Some(person) = self.state.world.person_mut(id) else {
+            return;
+        };
+        let family = person.partner == me || person.parents.contains(&me);
+        if family || !person.is_adult(now) {
+            return;
+        }
+        person.gone = true;
+        let name = person.name.full();
+        let partner = person.partner.take();
+        if let Some(partner) = partner.and_then(|id| self.state.world.person_mut(id)) {
+            partner.partner = None;
+        }
+        self.stale = true;
+        if told {
+            self.note(
+                Tone::Bad,
+                format!("{name} has had enough, and has left to seek a better life elsewhere."),
+            );
+        }
     }
 
     fn births(&mut self) {
@@ -943,8 +1227,17 @@ impl Simulation {
             child.regard = if mine { 80 } else { 40 };
             let fathers = father.as_ref().map_or(mother.views, |father| father.views);
             child.views = inherited_views(&mut self.state.rng, [&mother.views, &fathers]);
+            let mut inherited = mother.traits.clone();
+            if let Some(father) = &father {
+                inherited.extend(&father.traits);
+            }
+            child.traits = crate::people::random_traits(&mut self.state.rng, &inherited);
             child.role = Role::Idle;
+            let told = mine || !self.crowded() || self.is_close(mother_id);
             self.state.world.add_person(child);
+            if mother.member {
+                self.count_towards_the_month(1);
+            }
 
             let what = if sex == Sex::Female {
                 "daughter"
@@ -961,7 +1254,9 @@ impl Simulation {
             } else {
                 format!("A {what}, {given}, is born to {}.", mother.name.full())
             };
-            self.note(Tone::Good, words);
+            if told {
+                self.note(Tone::Good, words);
+            }
             self.stale = true;
         }
     }
@@ -993,7 +1288,45 @@ impl Simulation {
             .people()
             .filter(|(_, person)| !person.member)
             .count();
-        if camping >= MOST_WANDERERS || !self.state.rng.chance(WANDERER_CHANCE) {
+        let members = self.members().len();
+        let open = self.lives_by(Law::OpenGates);
+        let (content, settled) = match &self.state.settlement {
+            Some(settlement) => (settlement.contentment, true),
+            None => (50, false),
+        };
+        let can_draw = settled
+            && members >= DRAW_PEOPLE
+            && !self.lives_by(Law::ClosedGates)
+            && content >= RESTLESS
+            && self.food_days(members) >= DRAW_FOOD_DAYS
+            && (open || (members as u32) < self.housing());
+        // The more people there are, and the easier it is to get there, the more hear
+        // of the place and come to settle: so many in a hundred thousand days for each
+        // one who lives there already.
+        let mut stream = members.min(LARGE_TOWN) as u64 * SETTLERS_PER_HEAD;
+        if open {
+            stream *= 2;
+        }
+        if self.lives_by(Law::FreePort) {
+            stream = stream * 3 / 2;
+        }
+        if self.has_built(StructureKind::RailwayStation) {
+            stream *= 2;
+        }
+        if self.has_built(StructureKind::Airport) {
+            stream *= 2;
+        }
+        stream = match content {
+            0..40 => stream / 2,
+            40..65 => stream,
+            _ => stream * 5 / 4,
+        };
+        let settling = can_draw && self.state.rng.one_in(stream, 100_000);
+        // Whoever passes through and makes camp may ask to stay, the sooner the fewer
+        // there are to get used to.
+        let passing = self.state.rng.chance(WANDERER_CHANCE);
+        let asking = if open { 100 } else { 50 } * SMALL_BAND / (SMALL_BAND + members as u64);
+        if !settling && !(passing && (camping < MOST_WANDERERS || can_draw)) {
             return;
         }
 
@@ -1022,20 +1355,87 @@ impl Simulation {
             now.as_seconds() + days * SECONDS_PER_DAY,
         ));
 
-        let members = self.members().len();
-        let open = self.lives_by(Law::OpenGates);
-        let drawn = members >= DRAW_PEOPLE
-            && !self.lives_by(Law::ClosedGates)
-            && self.food_days(members) >= DRAW_FOOD_DAYS
-            && (open || (members as u32) < self.housing())
-            && self.state.rng.chance(if open { 100 } else { 50 });
-        if drawn {
-            let name = wanderer.name.full();
-            wanderer.member = true;
-            wanderer.leaves = None;
-            wanderer.regard = FRIENDLY;
-            wanderer.location = home;
+        let drawn = settling || (can_draw && self.state.rng.chance(asking));
+        if !drawn {
+            if camping >= MOST_WANDERERS {
+                return;
+            }
+            let way = self.state.player.location().bearing_to(camp).name();
             self.state.world.add_person(wanderer);
+            self.note(
+                Tone::Plain,
+                format!("Smoke rises to the {way}. Someone has made camp there."),
+            );
+            self.stale = true;
+            return;
+        }
+
+        // To a place of many, people come with their own: a partner, and a child.
+        let told = members < CROWD;
+        let name = wanderer.name.full();
+        let family = wanderer.name.last().to_owned();
+        let settle = |mut newcomer: Person| {
+            newcomer.member = true;
+            newcomer.leaves = None;
+            newcomer.regard = FRIENDLY;
+            newcomer.location = home;
+            newcomer
+        };
+        let first = settle(wanderer);
+        let (sex, views) = (first.sex, first.views);
+        let first = self.state.world.add_person(first);
+        self.count_towards_the_month(0);
+
+        let room = open || (members as u32 + 2) < self.housing();
+        if settling && members >= 12 && room && self.state.rng.chance(40) {
+            let mut partner = settle(Person::wanderer(&mut self.state.rng, now, home));
+            partner.sex = if sex == Sex::Female {
+                Sex::Male
+            } else {
+                Sex::Female
+            };
+            let given = given_name(&mut self.state.rng, partner.sex).to_owned();
+            partner.name = Name::new(given, Vec::new(), family.clone());
+            partner.partner = Some(first);
+            let partner_views = partner.views;
+            let partner = self.state.world.add_person(partner);
+            if let Some(first) = self.state.world.person_mut(first) {
+                first.partner = Some(partner);
+            }
+            self.count_towards_the_month(0);
+
+            if self.state.rng.chance(50) {
+                let childs = if self.state.rng.chance(50) {
+                    Sex::Female
+                } else {
+                    Sex::Male
+                };
+                let given = given_name(&mut self.state.rng, childs).to_owned();
+                let age_in_days = self.state.rng.between((200, 10 * 365)) as u64;
+                let born = now
+                    .as_seconds()
+                    .saturating_sub(age_in_days * SECONDS_PER_DAY);
+                let mut child = Person::new(
+                    Name::new(given, Vec::new(), family),
+                    childs,
+                    Timestamp::from_seconds(born),
+                    home,
+                );
+                child.views = inherited_views(&mut self.state.rng, [&views, &partner_views]);
+                child.parents = if sex == Sex::Female {
+                    [Some(first), Some(partner)]
+                } else {
+                    [Some(partner), Some(first)]
+                };
+                child.role = Role::Idle;
+                child.regard = FRIENDLY;
+                child.member = true;
+                self.state.world.add_person(child);
+                self.count_towards_the_month(0);
+            }
+        }
+
+        if told {
             let place = self
                 .state
                 .settlement
@@ -1044,13 +1444,6 @@ impl Simulation {
             self.note(
                 Tone::Good,
                 format!("{name} has come to {place} asking to stay, and is made welcome."),
-            );
-        } else {
-            let way = self.state.player.location().bearing_to(camp).name();
-            self.state.world.add_person(wanderer);
-            self.note(
-                Tone::Plain,
-                format!("Smoke rises to the {way}. Someone has made camp there."),
             );
         }
         self.stale = true;
@@ -1066,210 +1459,18 @@ impl Simulation {
 
     /// Returns how many days the food in the store lasts `members` people.
     pub(super) fn food_days(&self, members: usize) -> u32 {
-        let energy: u32 = self.store().map_or(0, |store| {
+        let energy: u64 = self.store().map_or(0, |store| {
             store
                 .stacks()
                 .iter()
-                .filter_map(|stack| Some(stack.item.food()?.energy * stack.count))
+                .filter_map(|stack| {
+                    Some(u64::from(stack.item.food()?.energy) * u64::from(stack.count))
+                })
                 .sum()
         });
 
-        energy / (ADULT_FARE * members.max(1) as u32)
-    }
-
-    /// Has those who work do a day of it.
-    fn labor(&mut self, members: &[PersonId]) {
-        let now = self.state.time;
-        let date = Date::from_timestamp(now);
-        let Some(settlement) = &self.state.settlement else {
-            return;
-        };
-        let kinds: Vec<StructureKind> = self.structures().into_iter().map(|(_, k)| k).collect();
-        let count = |kind| kinds.iter().filter(|built| **built == kind).count() as u32;
-        let tools = if settlement.knows(Advance::Ironworking) {
-            125
-        } else {
-            100
-        };
-        let boats = if count(StructureKind::Dock) > 0 { 2 } else { 1 };
-        let food_share = if settlement.lives_by(Law::OwnHearths) {
-            115
-        } else if settlement.lives_by(Law::SharedTable) {
-            95
-        } else {
-            100
-        };
-        let thinking = if settlement.lives_by(Law::Schooling) {
-            150
-        } else if settlement.lives_by(Law::OldCustoms) {
-            70
-        } else {
-            100
-        };
-        let working_age = self.working_age();
-        let written = settlement.knows(Advance::Writing);
-        let smoked = count(StructureKind::Smokehouse) > 0;
-        let workshop = count(StructureKind::Workshop) > 0;
-        let field_room = count(StructureKind::Field) * FARMERS_PER_FIELD;
-        let growing_season = (GROWING_SEASON.0..=GROWING_SEASON.1).contains(&date.ordinal());
-        let (fish, meat) = if smoked {
-            (Item::DriedFish, Item::DriedMeat)
-        } else {
-            (Item::CookedFish, Item::CookedMeat)
-        };
-
-        let mut yields: Vec<(Item, u32)> = Vec::new();
-        let (mut builders, mut crafters, mut thinkers, mut farmers) = (0, 0, 0, 0);
-        for id in members {
-            let Some(person) = self.state.world.person(*id) else {
-                continue;
-            };
-            if person.age(now) < working_age {
-                continue;
-            }
-            // Someone hired by the player thinks, whatever else they are set to.
-            if person.hired_until.is_some_and(|until| until > now) {
-                thinkers += 1;
-                continue;
-            }
-
-            match person.role {
-                Role::Forager => yields.push(if PlantSpecies::Bilberry.is_ripe(date) {
-                    (Item::Bilberries, 160)
-                } else if PlantSpecies::Lingonberry.is_ripe(date) {
-                    (Item::Lingonberries, 180)
-                } else {
-                    (Item::InnerBark, 40)
-                }),
-                Role::Gatherer => yields.extend([
-                    (Item::SpruceBough, 8),
-                    (Item::Stick, 6),
-                    (Item::SpruceRoot, 4),
-                    (Item::BirchBark, 3),
-                    (Item::Stone, 2),
-                ]),
-                Role::Fisher => {
-                    let catch = if self.conditions.frozen { 12 } else { 24 };
-                    yields.push((fish, catch * boats));
-                }
-                Role::Trapper => yields.extend([(meat, 10), (Item::HarePelt, 1)]),
-                Role::Woodcutter => yields.extend([(Item::Log, 4), (Item::Stick, 8)]),
-                Role::Farmer => farmers += 1,
-                Role::Builder => builders += 1,
-                Role::Crafter => crafters += 1,
-                Role::Thinker => thinkers += 1,
-                Role::Idle => {}
-            }
-        }
-
-        for (item, count) in yields {
-            let share = if item.food().is_some() {
-                food_share
-            } else {
-                100
-            };
-            self.stock(item, count * tools / 100 * share / 100);
-        }
-
-        if growing_season && let Some(settlement) = &mut self.state.settlement {
-            settlement.growing += farmers.min(field_room) * GRAIN_PER_FARMER_DAY * tools / 100;
-        }
-        let harvest = self.state.settlement.as_mut().map_or(0, |settlement| {
-            if date.ordinal() == HARVEST_DAY {
-                std::mem::take(&mut settlement.growing)
-            } else {
-                0
-            }
-        });
-        if harvest > 0 {
-            self.stock(Item::Grain, harvest);
-            self.note(
-                Tone::Good,
-                format!("The rye is brought in: {harvest} measures of grain."),
-            );
-        }
-
-        let mut hours = builders * WORKDAY * tools / 100;
-        for (id, kind) in self.structures() {
-            if hours == 0 {
-                break;
-            }
-            if kind != StructureKind::Site {
-                continue;
-            }
-            let Some(site) = self.state.world.structure_mut(id) else {
-                continue;
-            };
-            let Some(plan) = site.plan().and_then(building) else {
-                continue;
-            };
-            let put_in = hours.min(plan.hours.saturating_sub(site.work()).max(1));
-            hours -= put_in;
-            if site.build(put_in, plan.hours) {
-                self.finished_building(plan.kind);
-            }
-        }
-
-        let outfits = crafters * if workshop { 2 } else { 1 };
-        for _ in 0..outfits {
-            let unclothed = members.iter().copied().find(|id| {
-                let person = self.state.world.person(*id);
-                person.is_some_and(|person| !person.clothed)
-            });
-            let pelts = self.store().map_or(0, |store| store.count(Item::HarePelt));
-            let roots = self
-                .store()
-                .map_or(0, |store| store.count(Item::SpruceRoot));
-
-            if let Some(unclothed) = unclothed.filter(|_| pelts >= PELTS_PER_OUTFIT) {
-                if let Some(store) = self.store_mut() {
-                    store.take(Item::HarePelt, PELTS_PER_OUTFIT);
-                }
-                if let Some(person) = self.state.world.person_mut(unclothed) {
-                    person.clothed = true;
-                }
-            } else if roots >= 2
-                && let Some(store) = self.store_mut()
-            {
-                let cordage = (roots / 2).min(4);
-                store.take(Item::SpruceRoot, cordage * 2);
-                store.add(Item::Cordage, cordage);
-            }
-        }
-
-        // Insight is counted in tenths of a thinker's day. A little comes to any band of
-        // people by itself.
-        let mut insight = thinkers * 10;
-        if workshop {
-            insight = insight * 3 / 2;
-        }
-        if written {
-            insight = insight * 3 / 2;
-        }
-        if members.len() >= 2 {
-            insight += 3;
-        }
-        insight = insight * thinking / 100;
-        let learned = self.state.settlement.as_mut().and_then(|settlement| {
-            let pursuit = settlement.pursuit?;
-            settlement.insight += insight;
-            (settlement.insight >= pursuit.cost() * 10).then(|| {
-                settlement.advances.push(pursuit);
-                settlement.pursuit = None;
-                settlement.insight = 0;
-                pursuit
-            })
-        });
-        if let Some(advance) = learned {
-            self.note(
-                Tone::Good,
-                format!(
-                    "Your people have worked out {}. {}.",
-                    advance.name().to_lowercase(),
-                    advance.use_of()
-                ),
-            );
-        }
+        let days = energy / (u64::from(ADULT_FARE) * members.max(1) as u64);
+        u32::try_from(days).unwrap_or(u32::MAX)
     }
 
     /// Has everyone who lives in the settlement eat out of the store, and deals with those
@@ -1280,6 +1481,8 @@ impl Simulation {
         let mut store = self.store().cloned().unwrap_or_default();
         let mut starved = Vec::new();
         let mut left = Vec::new();
+        let leads = self.leads();
+        let today = now.as_seconds() / SECONDS_PER_DAY;
         let table = if self.lives_by(Law::SharedTable) {
             90
         } else if self.lives_by(Law::OwnHearths) {
@@ -1303,14 +1506,15 @@ impl Simulation {
                 CHILD_FARE
             };
             // Thinkers are kept on half as much again for their trouble.
-            if person.role == Role::Thinker && person.is_adult(now) {
+            if matches!(person.role, Role::Thinker | Role::Scholar) && person.is_adult(now) {
                 fare = fare * 3 / 2;
             }
             fare = fare * table / 100;
 
             if eat(&mut store, fare) >= fare * 4 / 5 {
                 person.hungry_days = 0;
-                if person.regard < 80 {
+                // Those who are fed come to think well of whoever leads, in time.
+                if leads && person.regard < 60 && (today + u64::from(id.0)).is_multiple_of(10) {
                     person.warm_to(1);
                 }
                 continue;
@@ -1340,15 +1544,19 @@ impl Simulation {
         for id in starved {
             self.person_dies(id, "hunger");
         }
+        let crowded = self.crowded();
         for id in left {
+            let told = !crowded || self.is_close(id);
             if let Some(person) = self.state.world.person_mut(id) {
                 person.gone = true;
                 let name = person.name.full();
                 self.stale = true;
-                self.note(
-                    Tone::Bad,
-                    format!("{name} has left to find food elsewhere."),
-                );
+                if told {
+                    self.note(
+                        Tone::Bad,
+                        format!("{name} has left to find food elsewhere."),
+                    );
+                }
             }
         }
     }
@@ -1400,26 +1608,66 @@ impl Simulation {
 
     /// Burns logs to heat the houses when it is freezing, and lets the frost take its toll
     /// of those it reaches.
-    fn winter(&mut self, members: &[PersonId]) {
+    pub(super) fn winter(&mut self, members: &[PersonId]) {
         if self.conditions.temperature.as_tenths() >= 0 || members.is_empty() {
             return;
         }
 
-        let needed = members.len().div_ceil(4) as u32;
-        let burned = self
-            .store_mut()
-            .map_or(0, |store| store.take(Item::Log, needed).count);
+        // The houses are heated by a power station where one runs, and with coal or logs
+        // where none does.
+        let powered = self
+            .state
+            .settlement
+            .as_ref()
+            .is_some_and(|settlement| settlement.running.power);
+        // A hard winter takes half as much wood again.
+        let today = self.state.time.as_seconds() / SECONDS_PER_DAY;
+        let hard = self
+            .state
+            .settlement
+            .as_ref()
+            .is_some_and(|settlement| settlement.hard_winter_until > today);
+        let usual = members.len().div_ceil(4) as u32;
+        let needed = if hard {
+            usual + usual.div_ceil(2)
+        } else {
+            usual
+        };
+        let burned = if powered {
+            needed
+        } else {
+            self.store_mut().map_or(0, |store| {
+                let coal = store.take(Item::Coal, needed).count;
+                coal + store.take(Item::Log, needed - coal).count
+            })
+        };
         let housed = self.housing() as usize;
         let woven = self
             .state
             .settlement
             .as_ref()
             .is_some_and(|settlement| settlement.knows(Advance::Weaving));
-        let exposed = if burned < needed {
-            self.note(
-                Tone::Bad,
-                "There are no logs in the store to heat the houses with.",
-            );
+        let was_unheated = self
+            .state
+            .settlement
+            .as_ref()
+            .is_some_and(|settlement| settlement.running.unheated);
+        if let Some(settlement) = &mut self.state.settlement {
+            settlement.running.unheated = burned < needed.min(usual);
+            if burned < needed {
+                settlement.contentment = settlement.contentment.saturating_sub(1).max(20);
+            }
+        }
+        // With the usual wood in a winter that takes more, the houses are cold, but
+        // nobody under a roof dies of it.
+        let exposed = if burned < needed.min(usual) {
+            if !was_unheated {
+                self.alert = true;
+                self.note(
+                    Tone::Bad,
+                    "There is nothing in the store to heat the houses with.",
+                );
+            }
             members.len()
         } else {
             members.len().saturating_sub(housed)
@@ -1496,6 +1744,13 @@ impl Simulation {
             );
         }
 
+        // Where most can read, and where few children die, fewer are born.
+        let days_to_conceive = match &self.state.settlement {
+            Some(settlement) if settlement.knows(Advance::Antibiotics) => 5_000,
+            Some(settlement) if settlement.knows(Advance::Vaccination) => 3_500,
+            Some(settlement) if settlement.literacy >= 50 => 2_200,
+            _ => 800,
+        };
         let due = Timestamp::from_seconds(now.as_seconds() + PREGNANCY_DAYS * SECONDS_PER_DAY);
         for id in members {
             let world = &self.state.world;
@@ -1513,7 +1768,7 @@ impl Simulation {
                 && partnered
                 && recovered
                 && woman.is_fertile(now)
-                && self.state.rng.one_in(1, 500)
+                && self.state.rng.one_in(1, days_to_conceive)
                 && let Some(woman) = self.state.world.person_mut(*id)
             {
                 woman.expecting = Some(due);
@@ -1521,31 +1776,126 @@ impl Simulation {
         }
     }
 
+    /// Returns how many in a hundred thousand die of a sickness in a day, as the
+    /// settlement is.
+    pub(super) fn sickness_risk(&self, members: usize) -> u64 {
+        let people = members as u32 + 1;
+        let Some(settlement) = &self.state.settlement else {
+            return SICKNESS_RISK * 10;
+        };
+        let knows = |advance| settlement.knows(advance);
+        let running = settlement.running;
+        let mut risk = SICKNESS_RISK * 10;
+
+        if knows(Advance::Herbalism) {
+            risk /= 2;
+        }
+        // Healers save the more the more of the people they can see to.
+        let seen_to = u64::from(
+            (running.healers * super::economy::PEOPLE_PER_HEALER * 100 / people).min(100),
+        );
+        let saved = if knows(Advance::Chemistry) { 60 } else { 35 };
+        risk = risk * (100 - saved * seen_to / 100) / 100;
+        if knows(Advance::Antibiotics) {
+            risk /= 3;
+        }
+        if people > self.housing() {
+            risk = risk * 3 / 2;
+        }
+        if self.has_built(StructureKind::Waterworks) {
+            risk = risk * 3 / 4;
+        } else if members >= 60 {
+            risk = risk * 5 / 4;
+        }
+        if self.has_built(StructureKind::Bathhouse) {
+            risk = risk * 9 / 10;
+        }
+        if self.has_built(StructureKind::Sauna) {
+            risk = risk * 19 / 20;
+        }
+        // Foul air and foul water shorten lives.
+        risk = risk * (100 + u64::from(running.pollution.min(60))) / 100;
+        let ale = self.store().is_some_and(|store| store.has(Item::Ale));
+        if ale {
+            risk = risk * 17 / 20;
+        }
+        if settlement.lives_by(Law::FreePort) {
+            risk = risk * 6 / 5;
+        }
+        risk
+    }
+
+    /// Returns the age from which each day may be someone's last.
+    pub(super) fn old_age(&self) -> u64 {
+        let mut age = super::life::OLD_AGE;
+        if self.knows_advance(Advance::Antibiotics) {
+            age += 5;
+        }
+        if self.knows_advance(Advance::ModernMedicine) {
+            age += 10;
+        }
+        age
+    }
+
     /// Lets sickness and old age take whom they take.
     fn mortality(&mut self, members: &[PersonId]) {
         let now = self.state.time;
-        let healed = self
-            .state
-            .settlement
-            .as_ref()
-            .is_some_and(|settlement| settlement.knows(Advance::Herbalism));
-        let mut sickness = if healed {
-            SICKNESS_RISK / 2
-        } else {
-            SICKNESS_RISK
-        };
+        let date = Date::from_timestamp(now);
+        let mut sickness = self.sickness_risk(members.len());
         if self.lives_by(Law::ClosedGates) && self.state.rng.chance(50) {
             sickness = 0;
         }
+        let vaccinated = self.knows_advance(Advance::Vaccination);
+        let chemistry = self.knows_advance(Advance::Chemistry);
+        let old_age = self.old_age();
+
+        // Now and then a sickness sweeps through a place where many live close together.
+        let epidemic = members.len() >= CROWD
+            && !vaccinated
+            && date.day() == 15
+            && self.state.rng.chance(EPIDEMIC_CHANCE);
+        if epidemic {
+            self.alert = true;
+            self.note(
+                Tone::Bad,
+                "A sickness is going from house to house. Many have taken to their beds.",
+            );
+            self.chronicle("A sickness went from house to house.");
+        }
+        let toll = EPIDEMIC_TOLL * sickness / (SICKNESS_RISK * 10);
 
         for id in members {
-            let Some(age) = self.state.world.person(*id).map(|person| person.age(now)) else {
+            let Some(person) = self.state.world.person(*id) else {
                 continue;
             };
-            let years_old = age.saturating_sub(super::life::OLD_AGE - 1);
+            let age = person.age(now);
+            let (hardy, frail) = (person.has(Trait::Hardy), person.has(Trait::Frail));
+            let years_old = age.saturating_sub(old_age - 1);
+            // Small children are the first to go.
+            let risk = match age {
+                0..5 if vaccinated => sickness * 3 / 2,
+                0..5 => sickness * 4,
+                _ => sickness,
+            };
+            let risk = if hardy {
+                risk / 2
+            } else if frail {
+                risk * 2
+            } else {
+                risk
+            };
 
-            if self.state.rng.one_in(sickness, 10_000) {
-                self.person_dies(*id, "a sickness");
+            let sickened = self.state.rng.one_in(risk, 100_000)
+                || (epidemic && self.state.rng.chance(toll.max(1)));
+            if sickened {
+                // A dose of medicine saves every other one it is given to.
+                let dosed = self
+                    .store_mut()
+                    .is_some_and(|store| store.take(Item::Medicine, 1).count > 0);
+                let cured = dosed && self.state.rng.chance(if chemistry { 75 } else { 50 });
+                if !cured {
+                    self.person_dies(*id, "a sickness");
+                }
             } else if self
                 .state
                 .rng
@@ -1593,11 +1943,15 @@ impl Simulation {
                     esteem: person.esteem,
                     hired: person.hired_until.is_some_and(|until| until > now),
                     backs_you: backers.contains(&id),
+                    traits: person.traits.clone(),
+                    skill: person.skill,
+                    apprenticed: person.apprenticed,
                 })
             })
             .collect();
         census.sort_by_key(|person| (std::cmp::Reverse(person.bond), person.id));
         self.census = census.into();
+        self.kin = self.kin().into();
 
         let politics = self.politics_view();
         self.town = self
@@ -1621,7 +1975,7 @@ impl Simulation {
                                 hours: plan.hours,
                             });
                         }
-                    } else if BUILDINGS.iter().any(|plan| plan.kind == *kind)
+                    } else if building(*kind).is_some()
                         || matches!(kind, StructureKind::Cabin | StructureKind::LeanTo)
                     {
                         match buildings.iter_mut().find(|(built, _)| built == kind) {
@@ -1631,7 +1985,35 @@ impl Simulation {
                     }
                 }
 
+                // The order of the buildings is that in which they come within reach.
+                buildings
+                    .sort_by_key(|(kind, _)| BUILDINGS.iter().position(|plan| plan.kind == *kind));
+                let kinds = self.built();
+                let ids = self.members();
+                let hands = self.hands(&ids, &kinds);
+                let jobs = Role::ALL
+                    .into_iter()
+                    .map(|role| (role, hands.of(role), places(role, &kinds)))
+                    .filter(|(_, working, places)| *working > 0 || places.is_some_and(|p| p > 0))
+                    .collect();
+
                 Arc::new(SettlementView {
+                    age: settlement.age(),
+                    monetized: self.monetized(),
+                    coined: settlement.knows(Advance::Coinage),
+                    treasury: settlement.treasury,
+                    tax: self.tax_rate(),
+                    ledger: settlement.ledger,
+                    orders: settlement.orders.clone(),
+                    literacy: settlement.literacy,
+                    contentment: settlement.contentment,
+                    running: settlement.running,
+                    tools: self.tools_percent(),
+                    defence: self.defence(),
+                    crime: settlement.crime,
+                    pollution: settlement.running.pollution,
+                    chronicle: settlement.chronicle.clone(),
+                    jobs,
                     name: settlement.name.clone(),
                     founded: settlement.founded,
                     // The player character lives there too.

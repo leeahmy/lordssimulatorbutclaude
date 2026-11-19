@@ -14,13 +14,31 @@ const NAME_WIDTH: f32 = 170.0;
 pub fn show(ui: &mut egui::Ui, view: &View) -> Option<Command> {
     let mut command = None;
 
+    // What takes knowing something that nobody here knows yet is left out.
+    let within_grasp = |recipe: Recipe| {
+        let knowledge = recipe.knowledge();
+        knowledge.is_none_or(|advance| view.at_hand.advances.contains(&advance))
+    };
     for trade in Trade::ALL {
         ui.label(RichText::new(trade.name()).strong());
         for recipe in Recipe::ALL {
-            if recipe.trade() == trade && row(ui, view, recipe) {
+            if recipe.trade() == trade && within_grasp(recipe) && row(ui, view, recipe) {
                 command = Some(Command::Craft(recipe));
             }
         }
+        ui.add_space(SECTION_SPACING);
+    }
+    let beyond = Recipe::ALL
+        .into_iter()
+        .filter(|recipe| !within_grasp(*recipe))
+        .count();
+    if beyond > 0 {
+        ui.label(
+            RichText::new(format!(
+                "{beyond} more things can be made once your people have worked out how."
+            ))
+            .weak(),
+        );
         ui.add_space(SECTION_SPACING);
     }
 
@@ -53,11 +71,7 @@ fn row(ui: &mut egui::Ui, view: &View, recipe: Recipe) -> bool {
     if recipe.needs_water() {
         needs.push(("the lake".to_owned(), lacks.contains(&Lack::Water)));
     }
-    if let Some((advance, workplace)) = recipe.craft() {
-        needs.push((
-            format!("your people knowing {}", advance.name().to_lowercase()),
-            lacks.contains(&Lack::Knowledge(advance)),
-        ));
+    if let Some(workplace) = recipe.workplace() {
         needs.push((
             format!("a {}", Kind::Structure(workplace).name().to_lowercase()),
             lacks.contains(&Lack::Workplace(workplace)),

@@ -5,7 +5,7 @@ use crate::action::{Job, Verb};
 use crate::body::{Cause, Effort};
 use crate::climate::{Sky, Temperature, Wind};
 use crate::craft::{Product, Recipe};
-use crate::item::{HEAVY_LOAD, Item, Stack};
+use crate::item::{Item, Stack};
 use crate::journal::Tone;
 use crate::object::{Activity, Living, Object};
 use crate::skill::Skill;
@@ -54,8 +54,15 @@ const FISH_TRAP_CHANCE: u64 = 40;
 const FISH_TRAP_CHANCE_PER_LEVEL: u64 = 4;
 const FISH_TRAP_HOLDS: u32 = 3;
 
-/// The chance in a hundred that a stone axe breaks on a tree.
-const AXE_BREAKING_CHANCE: u64 = 8;
+/// The chance in a hundred that two hours of hunting bring down a deer for someone
+/// unskilled, and how much each level of trapping adds to it.
+const HUNT_CHANCE: i64 = 25;
+const HUNT_CHANCE_PER_LEVEL: i64 = 4;
+
+/// How many stones an hour's breaking of a boulder gives, and how many shovelfuls of
+/// sand a round of digging.
+const STONES_PER_ROUND: u32 = 4;
+const SAND_PER_ROUND: u32 = 2;
 
 /// How many in-game seconds food takes to dry on a rack.
 const DRYING_TIME: u64 = 2 * SECONDS_PER_DAY;
@@ -95,6 +102,7 @@ impl Simulation {
                     | Verb::TryForChild
                     | Verb::Hire
                     | Verb::Deposit => Effort::Resting,
+                    Verb::Labor => Effort::Walking,
                     _ => Effort::Working,
                 },
                 Job::Craft(recipe) => match recipe.skill() {
@@ -176,13 +184,16 @@ impl Simulation {
             Verb::DigRoots => 420,
             Verb::PickBerries => 180,
             Verb::Fell => {
-                // Iron cuts twice as fast as stone.
-                let per_millimeter = if self.has(Item::IronAxe) > 0 { 3 } else { 6 };
+                // The better the axe, the faster it cuts.
+                let pace = self.best_axe().map_or(100, |(_, pace, _)| pace);
                 plant.map_or(300, |plant| {
-                    (plant.trunk_diameter().as_millimeters() as u32 * per_millimeter).max(300)
+                    (plant.trunk_diameter().as_millimeters() as u32 * 6 * pace / 100).max(300)
                 })
             }
-            Verb::DigClay => 600,
+            Verb::DigClay | Verb::DigSand => 600,
+            Verb::Quarry => 1_200,
+            Verb::Labor => 4 * 3_600,
+            Verb::Hunt => 2 * 3_600,
             Verb::RakeOre => 900,
             Verb::Hire => 300,
             Verb::PickUp | Verb::AddLog => 20,
@@ -226,7 +237,7 @@ impl Simulation {
         };
         if finished && repeats {
             let gathering = matches!(job, Job::Act { .. });
-            if gathering && self.state.player.carried().weight() > HEAVY_LOAD {
+            if gathering && self.state.player.carried().is_heavy() {
                 self.note(Tone::Plain, "You stop, as your load is getting heavy.");
                 return;
             }
@@ -361,12 +372,26 @@ impl Simulation {
             .any(|sighting| sighting.subject == subject)
     }
 
-    /// Returns how many of `item` the player has to use, carried or lying within reach.
     pub(super) fn has_axe(&self) -> bool {
         self.at_hand
             .has_tool(self.state.player.carried(), Item::StoneAxe)
     }
 
+    /// Returns the best axe the player has to use, with how many hundredths as long as a
+    /// stone axe it takes to fell a tree, and the chance in a hundred that it breaks.
+    fn best_axe(&self) -> Option<(Item, u32, u64)> {
+        [
+            Item::SteelAxe,
+            Item::IronAxe,
+            Item::BronzeAxe,
+            Item::StoneAxe,
+        ]
+        .into_iter()
+        .filter(|axe| self.has(*axe) > 0)
+        .find_map(|axe| axe.axe().map(|(pace, breaking)| (axe, pace, breaking)))
+    }
+
+    /// Returns how many of `item` the player has to use, carried or lying within reach.
     pub(super) fn has(&self, item: Item) -> u32 {
         self.at_hand.count(self.state.player.carried(), item)
     }
@@ -400,6 +425,15 @@ impl Simulation {
                     recipe.name().to_lowercase(),
                     lacks.join(", ")
                 ))
+            }
+            Job::Consume(Item::Medicine) => {
+                if self.has(Item::Medicine) == 0 {
+                    Err("You have no medicine.".to_owned())
+                } else if !body.is_sick() {
+                    Err("You are not sick.".to_owned())
+                } else {
+                    Ok(())
+                }
             }
             Job::Consume(item) => {
                 let Some(_) = item.food() else {
@@ -509,7 +543,16 @@ impl Simulation {
                     return Ok(());
                 };
                 if !self.is_ripe(plant.species()) {
-                    Err("There are no ripe berries here at this time of the year.".to_owned())
+                    Err(match plant.species() {
+                        PlantSpecies::Chanterelle => {
+                            "No mushrooms have come up here at this time of the year."
+                        }
+                        PlantSpecies::Nettle => {
+                            "The nettles are not worth cutting at this time of the year."
+                        }
+                        _ => "There are no ripe berries here at this time of the year.",
+                    }
+                    .to_owned())
                 } else if plant.stock(now) == 0 {
                     Err("This patch has been picked clean.".to_owned())
                 } else {
@@ -604,18 +647,37 @@ impl Simulation {
                 }
             }
             Verb::Fell | Verb::TakeDown | Verb::Build => Ok(()),
-            Verb::DigClay | Verb::RakeOre => {
-                let knows_iron = self.state.settlement.as_ref().is_some_and(|settlement| {
-                    settlement.knows(crate::settlement::Advance::Ironworking)
-                });
-                let item = if verb == Verb::DigClay {
-                    Item::Clay
+            Verb::Quarry => {
+                if carried.room_for(Item::Stone) == 0 {
+                    no_room()
                 } else {
-                    Item::BogOre
+                    Ok(())
+                }
+            }
+            Verb::Labor => match subject {
+                Subject::Thing(id) => self.check_labor(id),
+                Subject::Area(_) | Subject::Person(_) => Ok(()),
+            },
+            Verb::Hunt => {
+                if self.has(Item::Arrow) == 0 {
+                    Err("You have no arrows.".to_owned())
+                } else if self.conditions.light == crate::climate::Light::Dark {
+                    Err("It is too dark to hunt.".to_owned())
+                } else {
+                    Ok(())
+                }
+            }
+            Verb::DigClay | Verb::RakeOre | Verb::DigSand => {
+                use crate::settlement::Advance;
+                let (item, needed) = match verb {
+                    Verb::DigClay => (Item::Clay, None),
+                    Verb::DigSand => (Item::Sand, Some(Advance::Glassmaking)),
+                    _ => (Item::BogOre, Some(Advance::Ironworking)),
                 };
+                let known = needed.is_none_or(|needed| self.knows_advance(needed));
                 if self.conditions.frozen {
                     Err("The shore is frozen hard.".to_owned())
-                } else if verb == Verb::RakeOre && !knows_iron {
+                } else if !known {
                     Err("Nobody here knows what to look for, or what to do with it.".to_owned())
                 } else if carried.room_for(item) == 0 {
                     no_room()
@@ -685,6 +747,12 @@ impl Simulation {
         let (finished, skill) = match job {
             Job::Act { verb, subject } => (self.finish_act(verb, subject), verb.skill()),
             Job::Craft(recipe) => (self.finish_craft(recipe), Some(recipe.skill())),
+            Job::Consume(Item::Medicine) => {
+                self.use_up(Item::Medicine, 1);
+                self.state.player.body_mut().cure();
+                self.note(Tone::Good, "You take the medicine, and the sickness lifts.");
+                (true, None)
+            }
             Job::Consume(item) => (self.consume(item), None),
             Job::Appeal(appeal) => (self.finish_appeal(appeal), None),
             Job::EatSnow => {
@@ -814,8 +882,9 @@ impl Simulation {
                     [Stack::new(Item::Log, logs), Stack::new(Item::Stick, sticks)],
                 )));
 
-                if self.has(Item::IronAxe) == 0 && self.state.rng.chance(AXE_BREAKING_CHANCE) {
-                    self.use_up(Item::StoneAxe, 1);
+                let (axe, _, breaking) = self.best_axe().unwrap_or((Item::StoneAxe, 100, 0));
+                if self.state.rng.chance(breaking) {
+                    self.use_up(axe, 1);
                     self.note(
                         Tone::Bad,
                         format!("The {name} comes down, and the head of your axe cracks in two."),
@@ -946,6 +1015,30 @@ impl Simulation {
             Verb::Drink | Verb::FillWater => return self.finish_at_water(verb, true),
             Verb::Deposit => return self.deposit(),
             Verb::Build => return self.build(id),
+            Verb::Labor => return self.finish_labor(id),
+            Verb::Hunt => {
+                // An arrow is loosed either way, and seldom found again.
+                self.use_up(Item::Arrow, 1);
+                let level = i64::from(self.state.player.skills().level(Skill::Trapping));
+                let mut chance = HUNT_CHANCE + HUNT_CHANCE_PER_LEVEL * level;
+                if self.conditions.snow {
+                    // Tracks show in the snow.
+                    chance += 10;
+                }
+                if !self.state.rng.chance(chance.clamp(5, 85) as u64) {
+                    self.note(
+                        Tone::Plain,
+                        "You stalk the forest for hours, and come back with nothing.",
+                    );
+                    return false;
+                }
+                self.give(Stack::new(Item::DeerCarcass, 1));
+                self.note(Tone::Good, "You bring down a roe deer.");
+            }
+            Verb::Quarry => {
+                self.give(Stack::new(Item::Stone, STONES_PER_ROUND));
+                self.note(Tone::Plain, "You break stone off the boulder.");
+            }
             Verb::Fish
             | Verb::Talk
             | Verb::Gift
@@ -953,6 +1046,7 @@ impl Simulation {
             | Verb::Court
             | Verb::TryForChild
             | Verb::DigClay
+            | Verb::DigSand
             | Verb::RakeOre
             | Verb::Hire => return false,
         }
@@ -1026,6 +1120,10 @@ impl Simulation {
             Verb::DigClay => {
                 self.give(Stack::new(Item::Clay, 2));
                 self.note(Tone::Plain, "You dig grey clay out of the shore.");
+            }
+            Verb::DigSand => {
+                self.give(Stack::new(Item::Sand, SAND_PER_ROUND));
+                self.note(Tone::Plain, "You dig clean sand out of the shallows.");
             }
             Verb::RakeOre => {
                 self.give(Stack::new(Item::BogOre, 2));
@@ -1205,7 +1303,11 @@ impl Simulation {
             self.stale = true;
             self.society_stale = true;
         }
-        if out_of_store.count > 0 {
+        // What is had from the store is bought where there is coin, and held against
+        // the one who has it where there is none.
+        if out_of_store.count > 0 && self.monetized() {
+            self.charge(Self::buying_price(item, out_of_store.count));
+        } else if out_of_store.count > 0 {
             self.credit(-Self::worth(&out_of_store));
         }
         taken
@@ -1354,12 +1456,14 @@ impl Simulation {
             let structure = self.state.world.structure(*id);
             structure.is_some_and(|structure| structure.kind() == StructureKind::Storehouse)
         });
-        let potted = self
-            .state
-            .settlement
-            .as_ref()
-            .is_some_and(|settlement| settlement.knows(crate::settlement::Advance::Pottery));
-        let keeping = if stored { 50 } else { 100 } * if potted { 50 } else { 100 } / 100;
+        let potted = self.knows_advance(crate::settlement::Advance::Pottery);
+        // In a cold store nothing goes off at all.
+        let cold = self.has_built(StructureKind::ColdStore);
+        let keeping = if cold {
+            0
+        } else {
+            (if stored { 50 } else { 100 }) * (if potted { 50 } else { 100 }) / 100
+        };
 
         for stack in self.state.player.carried_mut().spoil(seconds) {
             self.note(
@@ -1422,8 +1526,9 @@ impl Simulation {
         let born = Date::from_timestamp(self.state.player.birth());
         let age = Date::from_timestamp(self.state.time).years_since(born);
 
-        if age >= OLD_AGE {
-            let years_past = age - OLD_AGE + 1;
+        let old_age = self.old_age();
+        if age >= old_age {
+            let years_past = age - old_age + 1;
             if self.state.rng.one_in(years_past * years_past, OLD_AGE_ODDS) {
                 self.die(Cause::OldAge);
             }

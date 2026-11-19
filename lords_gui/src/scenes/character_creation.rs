@@ -1,5 +1,5 @@
 use egui::RichText;
-use lords_sim::{Name, Sex};
+use lords_sim::{Name, Sex, Start};
 
 use crate::icons;
 
@@ -22,6 +22,7 @@ pub struct CharacterCreation {
     middle_names: Vec<String>,
     last_name: String,
     sex: Option<Sex>,
+    start: Start,
     focus_middle_name: Option<usize>,
 }
 
@@ -64,6 +65,7 @@ impl Scene for CharacterCreation {
             Some(sex) if start && self.missing_requirement().is_none() => SceneResponse::StartSim {
                 name: self.build_name(),
                 sex,
+                start: self.start,
             },
             _ => SceneResponse::None,
         }
@@ -86,6 +88,10 @@ impl CharacterCreation {
                 ui.add_space(SECTION_SPACING);
                 section_heading(ui, "Sex");
                 self.sex_buttons(ui);
+
+                ui.add_space(SECTION_SPACING);
+                section_heading(ui, "Start");
+                self.start_buttons(ui);
 
                 ui.add_space(SECTION_SPACING);
                 ui.separator();
@@ -198,6 +204,19 @@ impl CharacterCreation {
                 }
             }
         });
+    }
+
+    fn start_buttons(&mut self, ui: &mut egui::Ui) {
+        for start in Start::ALL {
+            let button = egui::Button::new(start.name())
+                .selected(self.start == start)
+                .min_size(egui::vec2(ui.available_width(), 0.0));
+            if ui.add(button).clicked() {
+                self.start = start;
+            }
+        }
+        ui.add_space(4.0);
+        ui.label(RichText::new(self.start.telling()).weak().small());
     }
 
     fn name_preview(&self, ui: &mut egui::Ui) {
